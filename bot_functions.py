@@ -102,6 +102,16 @@ def contains_swear(message_content: str, swear_list: list[str]) -> bool:
     return False
 
 
+def find_swear_word(message_content: str, swear_list: list[str]) -> str:
+    """Find and return the first swear word found in the message."""
+    for word in swear_list:
+        pattern = build_swear_pattern(word)
+        match = pattern.search(message_content)
+        if match:
+            return match.group()
+    return "Unknown"
+
+
 def censor_message(message_content: str, swear_list: list[str]) -> str:
     """
     Replace swear words with asterisks, preserving first letter.
