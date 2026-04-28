@@ -538,8 +538,25 @@ async def on_message(message: discord.Message):
 
     print(f"  [CHECK] Scanning message from {message.author}: {message.content[:50]}...")
 
-    # Skip moderation for whitelisted users, commands or bot messages
+    # ── LOG EVERY MESSAGE ────────────────────────
     whitelisted_users = cfg.get("WHITELISTED_USERS", [])
+    log_channel_id = cfg.get("LOG_CHANNEL_ID")
+    
+    if log_channel_id and not message.author.bot and message.channel.id != int(log_channel_id):
+        log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
+        if log_channel:
+            log_embed = discord.Embed(
+                title="💬 Message Sent",
+                color=0x2ECC71, # Green
+                timestamp=discord.utils.utcnow()
+            )
+            log_embed.add_field(name="Author", value=message.author.mention, inline=True)
+            log_embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+            log_embed.add_field(name="Content", value=message.content or "*No text content*", inline=False)
+            log_embed.set_footer(text=f"User ID: {message.author.id}")
+            await log_channel.send(embed=log_embed)
+
+    # Skip moderation for whitelisted users, commands or bot messages
     if (message.author.id in whitelisted_users or 
         message.author.guild_permissions.administrator or 
         message.content.startswith(PREFIX)):
@@ -562,7 +579,7 @@ async def on_message(message: discord.Message):
 
         log_channel_id = cfg.get("LOG_CHANNEL_ID")
         if log_channel_id:
-            log_channel = bot.get_channel(int(log_channel_id))
+            log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
             if log_channel:
                 censored = censor_message(message.content, swear_list)
                 log_embed = discord.Embed(title="🚨 Swear Filter Triggered", color=0xE74C3C, timestamp=discord.utils.utcnow())
@@ -592,7 +609,11 @@ async def on_message_delete(message: discord.Message):
     if not log_channel_id:
         return
         
-    log_channel = bot.get_channel(int(log_channel_id))
+    try:
+        log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
+    except:
+        return
+
     if not log_channel:
         return
 
@@ -619,7 +640,11 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
     if not log_channel_id:
         return
         
-    log_channel = bot.get_channel(int(log_channel_id))
+    try:
+        log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
+    except:
+        return
+
     if not log_channel:
         return
 
