@@ -540,9 +540,11 @@ async def on_message(message: discord.Message):
 
     # ── LOG EVERY MESSAGE ────────────────────────
     whitelisted_users = cfg.get("WHITELISTED_USERS", [])
+    log_whitelisted = cfg.get("LOG_WHITELISTED_USERS", [])
     log_channel_id = cfg.get("LOG_CHANNEL_ID")
     
-    if log_channel_id and not message.author.bot and message.channel.id != int(log_channel_id):
+    # Check if user is in log whitelist
+    if log_channel_id and not message.author.bot and message.channel.id != int(log_channel_id) and message.author.id not in log_whitelisted:
         try:
             log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
             if log_channel:
@@ -606,6 +608,10 @@ async def on_message_delete(message: discord.Message):
         return
     
     cfg = load_config()
+    log_whitelisted = cfg.get("LOG_WHITELISTED_USERS", [])
+    if message.author.id in log_whitelisted:
+        return
+
     log_channel_id = cfg.get("LOG_CHANNEL_ID")
     if not log_channel_id:
         return
@@ -637,6 +643,10 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
         return
         
     cfg = load_config()
+    log_whitelisted = cfg.get("LOG_WHITELISTED_USERS", [])
+    if before.author.id in log_whitelisted:
+        return
+
     log_channel_id = cfg.get("LOG_CHANNEL_ID")
     if not log_channel_id:
         return
@@ -920,6 +930,66 @@ async def set_img_cmd(ctx: commands.Context, mode: str, url: str = None):
     cfg[key] = img_url
     save_config(cfg)
     await ctx.send(f"✅ {mode.capitalize()} image updated!")
+
+# ── !logwhitelist ────────────────────────────
+
+@bot.group(name="logwhitelist", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def log_whitelist_grp(ctx: commands.Context):
+    """Manage the log whitelist (users who won't be logged). Usage: !logwhitelist <add/remove/list>"""
+    await ctx.send(f"❓ Usage: `{PREFIX}logwhitelist <add/remove/list> @user`")
+
+@log_whitelist_grp.command(name="add")
+@commands.has_permissions(administrator=True)
+async def log_whitelist_add(ctx: commands.Context, member: discord.Member):
+    """Add a user to the log whitelist."""
+    cfg = load_config()
+    whitelist = cfg.get("LOG_WHITELISTED_USERS", [])
+    
+    if member.id in whitelist:
+        await ctx.send(f"⚠️ {member.display_name} is already in the log whitelist.")
+        return
+        
+    whitelist.append(member.id)
+    cfg["LOG_WHITELISTED_USERS"] = whitelist
+    save_config(cfg)
+    await ctx.send(f"✅ {member.mention} foi adicionado à whitelist de logs! Suas mensagens não serão mais registradas.")
+
+@log_whitelist_grp.command(name="remove")
+@commands.has_permissions(administrator=True)
+async def log_whitelist_remove(ctx: commands.Context, member: discord.Member):
+    """Remove a user from the log whitelist."""
+    cfg = load_config()
+    whitelist = cfg.get("LOG_WHITELISTED_USERS", [])
+    
+    if member.id not in whitelist:
+        await ctx.send(f"⚠️ {member.display_name} não está na whitelist de logs.")
+        return
+        
+    whitelist.remove(member.id)
+    cfg["LOG_WHITELISTED_USERS"] = whitelist
+    save_config(cfg)
+    await ctx.send(f"✅ {member.mention} removido da whitelist de logs. Suas atividades voltarão a ser registradas.")
+
+@log_whitelist_grp.command(name="list")
+@commands.has_permissions(administrator=True)
+async def log_whitelist_list(ctx: commands.Context):
+    """List all log-whitelisted users."""
+    cfg = load_config()
+    whitelist = cfg.get("LOG_WHITELISTED_USERS", [])
+    
+    if not whitelist:
+        await ctx.send("ℹ️ A whitelist de logs está vazia.")
+        return
+        
+    mentions = [f"<@{uid}>" for uid in whitelist]
+    embed = discord.Embed(
+        title="👻 Log Whitelist (Invisíveis)",
+        description="\n".join(mentions),
+        color=0xF1C40F
+    )
+    await ctx.send(embed=embed)
+
 
 # ── !setcolor ────────────────────────────────
 
