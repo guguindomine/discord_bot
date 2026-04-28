@@ -14,12 +14,13 @@
 
 import discord
 from discord.ext import commands
-from datetime import datetime
+from datetime import datetime, timedelta
 from bot_functions import (
     load_config,
     save_config,
     contains_swear,
     censor_message,
+    find_swear_word,
     format_welcome_message,
     format_goodbye_message,
     format_timestamp,
@@ -30,6 +31,17 @@ from bot_functions import (
 #  LOAD CONFIG
 # ──────────────────────────────────────────────
 import os
+import re
+
+# ── SECURITY CONSTANTS ──
+SCAM_LINKS = [
+    "discord.gift/", "steamcommunity.com/gift", "nitro-", "free-nitro", 
+    "steam-promo", "dicsord", "dlscord", "giveaway-nitro"
+]
+MAX_EVERYONE_MENTIONS = 1
+QUARANTINE_ROLE_NAME = "Quarantined"
+QUARANTINE_CHANNEL_NAME = "⚖️-contest-punishment"
+
 config = load_config()
 
 # Load token from environment variable (Railway)
@@ -533,11 +545,6 @@ async def on_message(message: discord.Message):
                 print(f"  [ERROR] Lacking permissions to give Boost role '{role.name}'.")
         return
 
-    swear_filter_on = cfg.get("SWEAR_FILTER_ENABLED", True)
-    swear_list = cfg.get("SWEAR_WORDS", [])
-
-    print(f"  [CHECK] Scanning message from {message.author}: {message.content[:50]}...")
-
     # ── LOG EVERY MESSAGE ────────────────────────
     whitelisted_users = cfg.get("WHITELISTED_USERS", [])
     log_whitelisted = cfg.get("LOG_WHITELISTED_USERS", [])
@@ -566,19 +573,110 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    if swear_filter_on and swear_list and contains_swear(message.content, swear_list):
-        # Delete the message
+    # ── SECURITY & MODERATION SYSTEM ──
+    swear_filter_on = cfg.get("SWEAR_FILTER_ENABLED", True)
+    swear_list = cfg.get("SWEAR_WORDS", [])
+    user_id = str(message.author.id)
+
+    # 1. PHISHING & SCAM DETECTION
+    content_lower = message.content.lower()
+    is_scam = any(link in content_lower for link in SCAM_LINKS)
+    
+    if is_scam or (message.mention_everyone and not message.author.guild_permissions.mention_everyone):
         try:
             await message.delete()
-        except discord.Forbidden:
-            pass
+            scam_infractions = cfg.get("SCAM_INFRACTIONS", {})
+            scam_count = scam_infractions.get(user_id, 0) + 1
+            scam_infractions[user_id] = scam_count
+            cfg["SCAM_INFRACTIONS"] = scam_infractions
+            save_config(cfg)
 
-        warn_msg = cfg.get(
-            "SWEAR_WARN_MESSAGE",
-            "⚠️ {user}, watch your language! That word is not allowed here."
-        ).format(user=message.author.mention)
-        warn = await message.channel.send(warn_msg)
-        await warn.delete(delay=5)
+            scam_cfg = cfg.get("SCAM_THRESHOLDS", {"warn": 1, "mute1": 2, "mute2": 3, "quarantine": 4, "ban": 5})
+            
+            if scam_count == scam_cfg.get("warn"):
+                await message.channel.send(f"⚠️ {message.author.mention}, links de phishing são proibidos! (Aviso 1)", delete_after=15)
+            elif scam_count == scam_cfg.get("mute1"):
+                await message.author.timeout(timedelta(hours=1), reason="Scam Strike 2")
+                await message.channel.send(f"🔇 {message.author.mention} silenciado por 1h (Scam Strike 2)", delete_after=15)
+            elif scam_count == scam_cfg.get("mute2"):
+                await message.author.timeout(timedelta(days=1), reason="Scam Strike 3")
+                await message.channel.send(f"🔇 {message.author.mention} silenciado por 1 dia (Scam Strike 3)", delete_after=15)
+            elif scam_count == scam_cfg.get("quarantine"):
+                role, ch = await get_or_create_quarantine(message.guild)
+                await message.author.add_roles(role)
+                await message.channel.send(f"⚖️ {message.author.mention} enviado para Quarentena (Scam Strike 4)", delete_after=15)
+            elif scam_count >= scam_cfg.get("ban"):
+                await message.author.ban(reason="Scam Strikes Limit")
+                await message.channel.send(f"🚫 {message.author.name} banido por links de phishing.")
+            return 
+        except Exception as e:
+            print(f"  [ERROR] Scam detection failed: {e}")
+
+    # 2. SWEAR FILTER
+    if swear_filter_on and swear_list and contains_swear(message.content, swear_list):
+        infractions = cfg.get("INFRACTIONS", {})
+        if user_id not in infractions:
+            infractions[user_id] = []
+        
+        # Cooldown/Reset Check
+        if infractions[user_id]:
+            last_inf = infractions[user_id][-1]
+            last_time = datetime.strptime(last_inf["time"], "%Y-%m-%d %H:%M:%S")
+            time_diff = datetime.now() - last_time
+            count_before = len(infractions[user_id])
+            
+            reset_needed = False
+            if count_before <= 3 and time_diff > timedelta(minutes=30): reset_needed = True
+            elif count_before == 4 and time_diff > timedelta(hours=1): reset_needed = True
+            elif count_before >= 5 and time_diff > timedelta(days=1): reset_needed = True
+            
+            if reset_needed:
+                infractions[user_id] = []
+
+        # Log new infraction
+        word_found = find_swear_word(message.content, swear_list)
+        infractions[user_id].append({
+            "word": word_found,
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "channel": message.channel.name
+        })
+        cfg["INFRACTIONS"] = infractions
+        save_config(cfg)
+        
+        count = len(infractions[user_id])
+        swear_cfg = cfg.get("SWEAR_THRESHOLDS", {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8})
+        
+        # 1. Action: Silent delete
+        if count <= swear_cfg.get("silent", 1):
+            try: await message.delete()
+            except: pass
+            print(f"  [FILTER] Silent strike {count} for {message.author.name}")
+            return
+
+        # Subsequent strikes
+        try: await message.delete()
+        except: pass
+        
+        punishment_msg = ""
+        try:
+            if count == swear_cfg.get("warn1"):
+                punishment_msg = "⚠️ Este é seu **1º aviso**. Mantenha o respeito!"
+            elif count == swear_cfg.get("warn2"):
+                punishment_msg = "⚠️ Este é seu **2º aviso**. O próximo resultará em castigo!"
+            elif count == swear_cfg.get("mute"):
+                await message.author.timeout(timedelta(minutes=1), reason="Swear Strike")
+                punishment_msg = "🔇 Você foi castigado por **1 minuto**."
+            elif count >= swear_cfg.get("quarantine"):
+                role, ch = await get_or_create_quarantine(message.guild)
+                await message.author.add_roles(role)
+                punishment_msg = "⚖️ Você foi enviado para a **Quarentena** por excesso de avisos."
+        except: pass
+
+        warn_msg = f"⚠️ {message.author.mention}, watch your language!"
+        if punishment_msg:
+            warn_msg += f"\n{punishment_msg}"
+        
+        await message.channel.send(warn_msg, delete_after=10)
 
         log_channel_id = cfg.get("LOG_CHANNEL_ID")
         if log_channel_id:
@@ -1174,6 +1272,190 @@ async def toggle_filter_cmd(ctx: commands.Context):
     status = "🟢 **ON**" if not current else "🔴 **OFF**"
     await ctx.send(f"Swear filter is now {status}")
 
+
+# ── !swearlog ───────────────────────────────
+
+@bot.command(name="swearlog")
+@commands.has_permissions(administrator=True)
+async def swear_log_cmd(ctx: commands.Context, member: discord.Member = None):
+    """View the history of filtered words. Usage: !swearlog [@user]"""
+    cfg = load_config()
+    infractions = cfg.get("INFRACTIONS", {})
+    
+    if member:
+        # Show log for specific user
+        user_id = str(member.id)
+        user_data = infractions.get(user_id, [])
+        if not user_data:
+            await ctx.send(f"✅ **{member.display_name}** tem um histórico limpo!")
+            return
+            
+        embed = discord.Embed(title=f"🚨 Histórico: {member.display_name}", color=0xE74C3C)
+        embed.set_thumbnail(url=member.display_avatar.url)
+        
+        text = ""
+        for i, inf in enumerate(user_data[-10:], 1): # Show last 10
+            text += f"{i}. `{inf['word']}` em {inf['time']} (#{inf['channel']})\n"
+        
+        embed.description = text
+        embed.set_footer(text=f"Total de infrações: {len(user_data)}")
+        await ctx.send(embed=embed)
+    else:
+        # Show general stats
+        if not infractions:
+            await ctx.send("ℹ️ Nenhum palavrão registrado ainda.")
+            return
+            
+        embed = discord.Embed(title="📊 Top Infratores", color=0xE74C3C)
+        sorted_inf = sorted(infractions.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        text = ""
+        for i, (uid, data) in enumerate(sorted_inf[:10], 1):
+            user = bot.get_user(int(uid))
+            name = user.name if user else f"ID: {uid}"
+            text += f"{i}. **{name}**: {len(data)} infrações\n"
+        
+        embed.description = text or "Nenhum dado disponível."
+        await ctx.send(embed=embed)
+
+
+# ── !poll ───────────────────────────────────
+
+class PollView(discord.ui.View):
+    def __init__(self, timeout=None):
+        super().__init__(timeout=timeout)
+        self.likes = 0
+        self.dislikes = 0
+        self.voters = set()
+
+    @discord.ui.button(label="Concordo (0)", style=discord.ButtonStyle.success, emoji="👍", custom_id="poll_like")
+    async def like(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.voters:
+            await interaction.response.send_message("❌ Você já votou nesta enquete!", ephemeral=True)
+            return
+        self.likes += 1
+        self.voters.add(interaction.user.id)
+        button.label = f"Concordo ({self.likes})"
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Discordo (0)", style=discord.ButtonStyle.danger, emoji="👎", custom_id="poll_dislike")
+    async def dislike(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.voters:
+            await interaction.response.send_message("❌ Você já votou nesta enquete!", ephemeral=True)
+            return
+        self.dislikes += 1
+        self.voters.add(interaction.user.id)
+        button.label = f"Discordo ({self.dislikes})"
+        await interaction.response.edit_message(view=self)
+
+@bot.command(name="poll")
+async def poll_cmd(ctx: commands.Context, question: str, time: int = 60):
+    """Create a poll. Usage: !poll "Sua pergunta" [tempo_segundos]"""
+    embed = discord.Embed(
+        title="🗳️ Enquete Paradox",
+        description=f"**{question}**\n\nVote usando os botões abaixo!",
+        color=0x9B59B6,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    embed.set_footer(text=f"Enquete dura {time}s")
+    
+    msg = await ctx.send(embed=embed, view=PollView(timeout=time))
+    await ctx.message.delete()
+
+# ── SECURITY: QUARANTINE SYSTEM ──
+
+async def get_or_create_quarantine(guild):
+    role = discord.utils.get(guild.roles, name=QUARANTINE_ROLE_NAME)
+    if not role:
+        role = await guild.create_role(name=QUARANTINE_ROLE_NAME, color=0x34495E, reason="Security system setup")
+        for channel in guild.channels:
+            try:
+                await channel.set_permissions(role, view_channel=False, send_messages=False)
+            except: pass
+            
+    channel = discord.utils.get(guild.text_channels, name=QUARANTINE_CHANNEL_NAME)
+    if not channel:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        }
+        channel = await guild.create_text_channel(name=QUARANTINE_CHANNEL_NAME, overwrites=overwrites)
+        await channel.send("⚠️ **Você foi colocado em quarentena.**\nFale com os moderadores aqui para contestar sua punição.")
+    return role, channel
+
+# ── MODERATION COMMANDS ───────────────────────
+
+@bot.command(name="softban")
+@commands.has_permissions(ban_members=True)
+async def softban_cmd(ctx, member: discord.Member, *, reason="No reason provided"):
+    """Ban and immediately unban to clear messages. Admin only."""
+    await member.ban(reason=f"Softban: {reason}", delete_message_days=7)
+    await ctx.guild.unban(member, reason="Softban completion")
+    await ctx.send(f"🧼 **{member.display_name}** was softbanned. (Messages cleared)")
+
+@bot.command(name="mute")
+@commands.has_permissions(moderate_members=True)
+async def mute_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason="No reason provided"):
+    """Timeout a member. Usage: !mute @user 10 reason"""
+    await member.timeout(timedelta(minutes=minutes), reason=reason)
+    await ctx.send(f"🔇 **{member.display_name}** was muted for {minutes} minutes.")
+
+@bot.command(name="quarantine")
+@commands.has_permissions(administrator=True)
+async def quarantine_cmd(ctx, member: discord.Member):
+    """Manually send a member to quarantine. Admin only."""
+    role, channel = await get_or_create_quarantine(ctx.guild)
+    await member.add_roles(role)
+    await ctx.send(f"⚖️ **{member.display_name}** was sent to {channel.mention}.")
+
+@bot.command(name="addscam")
+@commands.has_permissions(administrator=True)
+async def add_scam_cmd(ctx, link: str):
+    """Add a new link to the phishing blacklist."""
+    global SCAM_LINKS
+    if link in SCAM_LINKS:
+        await ctx.send("⚠️ Este link já está na blacklist.")
+        return
+    SCAM_LINKS.append(link)
+    await ctx.send(f"✅ Link `{link}` adicionado ao filtro de phishing!")
+
+@bot.command(name="clearscamlog")
+@commands.has_permissions(administrator=True)
+async def clear_scam_log_cmd(ctx, member: discord.Member):
+    """Reset the scam/phishing infraction count for a user."""
+    cfg = load_config()
+    scam_infractions = cfg.get("SCAM_INFRACTIONS", {})
+    if str(member.id) in scam_infractions:
+        del scam_infractions[str(member.id)]
+        cfg["SCAM_INFRACTIONS"] = scam_infractions
+        save_config(cfg)
+        await ctx.send(f"✅ Histórico de phishing de {member.display_name} foi limpo.")
+    else:
+        await ctx.send("ℹ️ Este usuário não possui histórico de phishing.")
+
+@bot.command(name="setthreshold")
+@commands.has_permissions(administrator=True)
+async def set_threshold_cmd(ctx, system: str, key: str, value: int):
+    """Set security thresholds. Usage: !setthreshold <swear/scam> <key> <value>"""
+    cfg = load_config()
+    system = system.lower()
+    
+    if system == "swear":
+        thresholds = cfg.get("SWEAR_THRESHOLDS", {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8})
+        thresholds[key] = value
+        cfg["SWEAR_THRESHOLDS"] = thresholds
+    elif system == "scam":
+        thresholds = cfg.get("SCAM_THRESHOLDS", {"warn": 1, "mute1": 2, "mute2": 3, "quarantine": 4, "ban": 5})
+        thresholds[key] = value
+        cfg["SCAM_THRESHOLDS"] = thresholds
+    else:
+        await ctx.send("❌ Use `swear` ou `scam` como sistema.")
+        return
+        
+    save_config(cfg)
+    await ctx.send(f"✅ Limite de `{system}` para `{key}` atualizado para `{value}`!")
 
 # ── !botinfo ─────────────────────────────────
 
