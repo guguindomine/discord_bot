@@ -77,22 +77,23 @@ class TicketControlView(discord.ui.View):
     def __init__(self, vouch_enabled: bool = False, vouched: bool = False):
         super().__init__(timeout=None)
         to_remove = []
-        if vouch_enabled:
-            if not vouched:
-                # Carry Ticket, NOT YET VOUCHED: Show ONLY Vouch button
-                for item in self.children:
-                    if getattr(item, "custom_id", None) == "close_ticket":
-                        to_remove.append(item)
-            else:
-                # Carry Ticket, ALREADY VOUCHED: Show ONLY Close button
-                for item in self.children:
-                    if getattr(item, "custom_id", None) == "vouch_ticket":
-                        to_remove.append(item)
-        else:
-            # Support/Helper Ticket: Show ONLY Close button
-            for item in self.children:
-                if getattr(item, "custom_id", None) == "vouch_ticket":
+        for item in self.children:
+            custom_id = getattr(item, "custom_id", None)
+            
+            if not vouch_enabled:
+                # Support/Helper: Hide Vouch, Keep Close
+                if custom_id == "vouch_ticket":
                     to_remove.append(item)
+            else:
+                # Carry Ticket
+                if not vouched:
+                    # Not vouched: Hide Close, Keep Vouch
+                    if custom_id == "close_ticket":
+                        to_remove.append(item)
+                else:
+                    # Vouched: Hide Vouch, Keep Close
+                    if custom_id == "vouch_ticket":
+                        to_remove.append(item)
         
         for item in to_remove:
             self.remove_item(item)
