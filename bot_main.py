@@ -74,14 +74,24 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 class TicketControlView(discord.ui.View):
     """View inside a created ticket for closing and vouching."""
-    def __init__(self, vouch_enabled: bool = False):
+    def __init__(self, vouch_enabled: bool = False, vouched: bool = False):
         super().__init__(timeout=None)
-        if not vouch_enabled:
-            # Remove the vouch button if not specifically enabled (only for Carries)
+        if vouch_enabled:
+            if not vouched:
+                # Carry Ticket, NOT YET VOUCHED: Show ONLY Vouch button
+                for item in self.children:
+                    if hasattr(item, "custom_id") and item.custom_id == "close_ticket":
+                        self.remove_item(item)
+            else:
+                # Carry Ticket, ALREADY VOUCHED: Show ONLY Close button
+                for item in self.children:
+                    if hasattr(item, "custom_id") and item.custom_id == "vouch_ticket":
+                        self.remove_item(item)
+        else:
+            # Support/Helper Ticket: Show ONLY Close button
             for item in self.children:
                 if hasattr(item, "custom_id") and item.custom_id == "vouch_ticket":
                     self.remove_item(item)
-                    break
 
     @discord.ui.button(label="Vouch Staff", style=discord.ButtonStyle.success, custom_id="vouch_ticket", emoji="⭐")
     async def vouch_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -97,21 +107,24 @@ class TicketControlView(discord.ui.View):
             return
 
         # Show a view with buttons for each participant
-        view = VouchSelectView(participants, interaction.channel)
+        # We pass the original message so we can edit it later
+        view = VouchSelectView(participants, interaction.channel, interaction.message)
         await interaction.response.send_message("🌟 **Who helped you today?** Select a staff member to vouch for:", view=view, ephemeral=True)
 
 class VouchSelectView(discord.ui.View):
-    def __init__(self, participants, channel):
+    def __init__(self, participants, channel, original_msg):
         super().__init__(timeout=60)
         self.channel = channel
+        self.original_msg = original_msg
         for p in participants[:5]: # Max 5 buttons
-            self.add_item(VouchButton(p, channel))
+            self.add_item(VouchButton(p, channel, original_msg))
 
 class VouchButton(discord.ui.Button):
-    def __init__(self, member, channel):
+    def __init__(self, member, channel, original_msg):
         super().__init__(label=member.name, style=discord.ButtonStyle.primary, emoji="⭐")
         self.member = member
         self.channel = channel
+        self.original_msg = original_msg
 
     async def callback(self, interaction: discord.Interaction):
         cfg = load_config()
@@ -144,19 +157,21 @@ class VouchButton(discord.ui.Button):
             except: pass
 
         await interaction.response.send_message(f"✅ You vouched for **{self.member.name}**! They now have **{count}** vouches.", ephemeral=True)
+        
+        # NOW: Update the original message to show the CLOSE button
+        try:
+            await self.original_msg.edit(view=TicketControlView(vouch_enabled=True, vouched=True))
+        except: pass
+        
         self.view.stop()
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket", emoji="🔒")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
-        await discord.utils.sleep_until(datetime.fromtimestamp(interaction.created_at.timestamp() + 5))
+        import asyncio
+        await asyncio.sleep(5)
         try:
-            # Check if it's a thread and delete it
-            if isinstance(interaction.channel, discord.Thread):
-                await interaction.channel.delete()
-            else:
-                # Fallback for old channel tickets
-                await interaction.channel.delete()
+            await interaction.channel.delete()
         except Exception as e:
             print(f"Failed to delete ticket: {e}")
 
@@ -272,7 +287,7 @@ class HelpSelect(discord.ui.Select):
         elif cat == "tickets":
             embed.title = "🎟️ Tickets & Helper Applications"
             embed.description = (
-                f"`{prefix}setupticket <support/macro/carry>` - Setup buttons\n"
+                f"`{prefix}setupticket <support/macro/carry/helper>` - Setup buttons\n"
                 f"`{prefix}setticketcategory <id>` - Set category for new tickets\n"
                 f"`{prefix}setvouchchannel <#ch>` - Set where vouches go\n\n"
                 f"**Helper App Config (Advanced):**\n"
