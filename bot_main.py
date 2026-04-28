@@ -224,9 +224,9 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setthreshold <sys> <key> <val>` - Config punishment levels\n"
                 f"`{prefix}addscam <link>` - Add to phishing blacklist\n"
                 f"`{prefix}clearscamlog <@user>` - Reset scam strikes\n"
-                f"`{prefix}addswear <word>` - Add word to filter\n"
                 f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
-                f"`{prefix}logwhitelist <add/remove>` - Invisible from logs"
+                f"`{prefix}logwhitelist <add/remove>` - Invisible from logs\n"
+                f"`{prefix}unquarantine <@user>` - Release user from prison"
             )
         elif cat == "general":
             embed.title = "📊 General & Utilities"
@@ -612,8 +612,7 @@ async def on_message(message: discord.Message):
                 await message.author.timeout(timedelta(days=1), reason="Scam Strike 3")
                 await message.channel.send(f"🔇 {message.author.mention} silenciado por 1 dia (Scam Strike 3)", delete_after=15)
             elif scam_count == scam_cfg.get("quarantine"):
-                role, ch = await get_or_create_quarantine(message.guild)
-                await message.author.add_roles(role)
+                await apply_quarantine(message.author, "Scam Strikes")
                 await message.channel.send(f"⚖️ {message.author.mention} enviado para Quarentena (Scam Strike 4)", delete_after=15)
             elif scam_count >= scam_cfg.get("ban"):
                 await message.author.ban(reason="Scam Strikes Limit")
@@ -677,8 +676,7 @@ async def on_message(message: discord.Message):
                 await message.author.timeout(timedelta(minutes=1), reason="Swear Strike")
                 punishment_msg = "🔇 Você foi castigado por **1 minuto**."
             elif count >= swear_cfg.get("quarantine"):
-                role, ch = await get_or_create_quarantine(message.guild)
-                await message.author.add_roles(role)
+                await apply_quarantine(message.author, "Swear Strikes")
                 punishment_msg = "⚖️ Você foi enviado para a **Quarentena** por excesso de avisos."
         except: pass
 
@@ -1395,6 +1393,31 @@ async def get_or_create_quarantine(guild):
         await channel.send("⚠️ **Você foi colocado em quarentena.**\nFale com os moderadores aqui para contestar sua punição.")
     return role, channel
 
+async def apply_quarantine(member: discord.Member, reason: str):
+    """Saves roles, removes them, and adds Quarantined role."""
+    guild = member.guild
+    cfg = load_config()
+    
+    # Save current roles (excluding @everyone and Quarantined)
+    role_ids = [role.id for role in member.roles if not role.is_default() and role.name != QUARANTINE_ROLE_NAME]
+    
+    quarantine_data = cfg.get("QUARANTINE_ROLES", {})
+    quarantine_data[str(member.id)] = role_ids
+    cfg["QUARANTINE_ROLES"] = quarantine_data
+    save_config(cfg)
+    
+    role, ch = await get_or_create_quarantine(guild)
+    
+    # Remove all removable roles and add quarantine
+    try:
+        # We try to remove all roles at once
+        roles_to_remove = [r for r in member.roles if not r.is_default() and r < guild.me.top_role]
+        await member.remove_roles(*roles_to_remove, reason=f"Quarantine: {reason}")
+        await member.add_roles(role, reason=f"Quarantine: {reason}")
+    except:
+        # Fallback if bot permissions are tricky
+        await member.add_roles(role)
+
 # ── MODERATION COMMANDS ───────────────────────
 
 @bot.command(name="softban")
@@ -1416,9 +1439,9 @@ async def mute_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason="No
 @commands.has_permissions(administrator=True)
 async def quarantine_cmd(ctx, member: discord.Member):
     """Manually send a member to quarantine. Admin only."""
-    role, channel = await get_or_create_quarantine(ctx.guild)
-    await member.add_roles(role)
-    await ctx.send(f"⚖️ **{member.display_name}** was sent to {channel.mention}.")
+    await apply_quarantine(member, "Manual Moderator Action")
+    ch_name = QUARANTINE_CHANNEL_NAME
+    await ctx.send(f"⚖️ **{member.display_name}** foi enviado para a quarentena.")
 
 @bot.command(name="addscam")
 @commands.has_permissions(administrator=True)
@@ -1444,6 +1467,43 @@ async def clear_scam_log_cmd(ctx, member: discord.Member):
         await ctx.send(f"✅ Histórico de phishing de {member.display_name} foi limpo.")
     else:
         await ctx.send("ℹ️ Este usuário não possui histórico de phishing.")
+
+@bot.command(name="unquarantine")
+@commands.has_permissions(administrator=True)
+async def unquarantine_cmd(ctx, member: discord.Member):
+    """Manually release a member from quarantine and restore roles."""
+    cfg = load_config()
+    role = discord.utils.get(ctx.guild.roles, name=QUARANTINE_ROLE_NAME)
+    
+    if role and role in member.roles:
+        await member.remove_roles(role)
+        
+        # Restore saved roles
+        quarantine_data = cfg.get("QUARANTINE_ROLES", {})
+        saved_role_ids = quarantine_data.get(str(member.id), [])
+        
+        roles_to_add = []
+        for rid in saved_role_ids:
+            r = ctx.guild.get_role(int(rid))
+            if r and r < ctx.guild.me.top_role:
+                roles_to_add.append(r)
+        
+        if roles_to_add:
+            try:
+                await member.add_roles(*roles_to_add, reason="Released from quarantine")
+                await ctx.send(f"✅ **{member.display_name}** liberado! {len(roles_to_add)} cargos devolvidos.")
+            except:
+                await ctx.send(f"✅ **{member.display_name}** liberado, mas houve um erro ao devolver alguns cargos.")
+        else:
+            await ctx.send(f"✅ **{member.display_name}** liberado da quarentena!")
+            
+        # Clean up config
+        if str(member.id) in quarantine_data:
+            del quarantine_data[str(member.id)]
+            cfg["QUARANTINE_ROLES"] = quarantine_data
+            save_config(cfg)
+    else:
+        await ctx.send(f"ℹ️ **{member.display_name}** não está na quarentena.")
 
 @bot.command(name="setthreshold")
 @commands.has_permissions(administrator=True)
