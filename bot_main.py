@@ -194,8 +194,11 @@ class HelpSelect(discord.ui.Select):
             embed.title = "🎟️ Tickets & Helper Applications"
             embed.description = (
                 f"`{prefix}setupticket <support/macro/helper>` - Setup buttons\n"
-                f"`{prefix}setticketcategory <id>` - Set category for new tickets\n"
-                f"`{prefix}sethelpertext <id> <questions>` - Config app forms\n"
+                f"`{prefix}setticketcategory <id>` - Set category for new tickets\n\n"
+                f"**Helper App Config (Advanced):**\n"
+                f"`{prefix}sethelpertext <id> <questions>` - Bulk replace\n"
+                f"`{prefix}sethelpertext <id> q1 Text ; q5 Text` - Target update\n"
+                f"`{prefix}sethelpertext <id> q3 remove` - Delete question 3\n"
                 f"**IDs:** `ALS`, `AV`, `ASTD`, `UTD`, `AG`, `AC`, `BL`, `SP`, `ARX`, `AOL`"
             )
         elif cat == "boost":
@@ -304,14 +307,29 @@ class HelperTicketSelect(discord.ui.Select):
             reason=f"Carry request for {game_name}"
         )
 
-        questions = game_data.get("questions", "1. Timezone?\n2. Roblox Level?\n3. Image of units?")
+        questions_raw = game_data.get("questions", ["Timezone?", "Roblox Level?", "Image of units?"])
         
+        # Handle migration/formatting
+        if isinstance(questions_raw, list):
+            formatted_questions = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions_raw)])
+        else:
+            # Fallback for old string format
+            formatted_questions = questions_raw
+
         embed = discord.Embed(
             title=f"🎮 {game_name} | Helper Application",
-            description=f"Hello {member.mention}! Please answer the questions below to apply for the **Helper/Booster** role for this game.\n\n**Application Form:**\n```\n{questions}\n```",
+            description=(
+                f"Hello {member.mention}! Thank you for applying for the **Helper/Booster** role.\n\n"
+                "### 📋 Instructions\n"
+                "1. Answer all questions clearly and honestly.\n"
+                "2. If a question asks for a screenshot (SS), please attach it.\n"
+                "3. Staff will review your application soon. **Do not ping staff.**\n\n"
+                "**Application Form:**\n"
+                f"```\n{formatted_questions}\n```"
+            ),
             color=0xF1C40F
         )
-        embed.set_footer(text="Paradox Bot 💜 Helper System")
+        embed.set_footer(text="Paradox Bot 💜 Serious Applications Only")
         
         await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView())
         await interaction.response.send_message(f"✅ Created! Check {channel.mention}", ephemeral=True)
@@ -867,8 +885,11 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
 
 @bot.command(name="sethelpertext")
 @commands.has_permissions(administrator=True)
-async def set_helper_text(ctx: commands.Context, game_code: str, *, questions: str):
-    """Set the application questions for a specific game. Admin only."""
+async def set_helper_text(ctx: commands.Context, game_code: str, *, questions_input: str):
+    """
+    Set or update application questions. 
+    Usage: !sethelpertext astd q1 New Question ; q7 Another Question ; q3 remove
+    """
     game_code = game_code.upper()
     cfg = load_config()
     games = cfg.get("HELPER_GAMES", {})
@@ -876,11 +897,58 @@ async def set_helper_text(ctx: commands.Context, game_code: str, *, questions: s
     if game_code not in games:
         await ctx.send(f"❌ Game `{game_code}` not found. (Examples: ALS, AV, ASTD)")
         return
-    
-    games[game_code]["questions"] = questions
+
+    # Get current questions and ensure they are in list format
+    current_questions = games[game_code].get("questions", [])
+    if isinstance(current_questions, str):
+        # Migrate string to list
+        lines = current_questions.strip().split("\n")
+        current_questions = [re.sub(r'^\d+\.\s*', '', line).strip() for line in lines if line.strip()]
+
+    # Advanced Parsing Logic
+    if ";" not in questions_input and not re.match(r'^q\d+\s+', questions_input, re.IGNORECASE):
+        # Bulk update if no qN syntax is used
+        new_questions = [q.strip() for q in questions_input.split("\n") if q.strip()]
+    else:
+        parts = questions_input.split(";")
+        new_questions = list(current_questions)
+        to_delete = set()
+        updates = []
+
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            
+            match = re.match(r'^q(\d+)\s*(.*)', part, re.IGNORECASE)
+            if match:
+                num = int(match.group(1))
+                text = match.group(2).strip()
+                idx = num - 1
+                
+                if text.lower() in ["delete", "remove", "none"]:
+                    to_delete.add(idx)
+                else:
+                    updates.append((idx, text))
+            else:
+                # If no qN prefix but semicolons exist, treat as an append or ignore
+                if part: updates.append((len(new_questions) + len(updates), part))
+
+        # Apply updates
+        for idx, text in updates:
+            while len(new_questions) <= idx:
+                new_questions.append("...")
+            new_questions[idx] = text
+        
+        # Apply deletions (reverse to keep indices valid)
+        for idx in sorted(list(to_delete), reverse=True):
+            if idx < len(new_questions):
+                new_questions.pop(idx)
+
+    games[game_code]["questions"] = new_questions
     cfg["HELPER_GAMES"] = games
     save_config(cfg)
-    await ctx.send(f"✅ Questions updated for **{games[game_code]['name']}**!")
+    
+    await ctx.send(f"✅ Questions updated for **{games[game_code]['name']}**! (Total: {len(new_questions)})")
 
 
 # ── !testjoin ────────────────────────────────
