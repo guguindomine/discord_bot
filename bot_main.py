@@ -116,6 +116,16 @@ class TicketControlView(discord.ui.View):
         view = VouchSelectView(participants, interaction.channel, interaction.message)
         await interaction.response.send_message("🌟 **Who helped you today?** Select a staff member to vouch for:", view=view, ephemeral=True)
 
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket", emoji="🔒")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
+        import asyncio
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete()
+        except Exception as e:
+            print(f"Failed to delete ticket: {e}")
+
 class VouchSelectView(discord.ui.View):
     def __init__(self, participants, channel, original_msg):
         super().__init__(timeout=60)
@@ -169,16 +179,6 @@ class VouchButton(discord.ui.Button):
         except: pass
         
         self.view.stop()
-
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket", emoji="🔒")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
-        import asyncio
-        await asyncio.sleep(5)
-        try:
-            await interaction.channel.delete()
-        except Exception as e:
-            print(f"Failed to delete ticket: {e}")
 
 class BoostRoleView(discord.ui.View):
     """Dropdown for boosters to pick a role."""
