@@ -162,8 +162,9 @@ class HelpView(discord.ui.View):
 class HelpSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Setup & Config", description="Greetings, Roles & Toggles", emoji="🛠️", value="setup"),
+            discord.SelectOption(label="Setup & Config", description="Greetings, Roles, Logs & Toggles", emoji="⚙️", value="setup"),
             discord.SelectOption(label="Tickets & Apps", description="Support, Macros & Helper Apps", emoji="🎟️", value="tickets"),
+            discord.SelectOption(label="Server Boost", description="Automated boost roles & logs", emoji="💎", value="boost"),
             discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Purge", emoji="🔨", value="mod"),
             discord.SelectOption(label="Security & Filter", description="Scam detection & Quarantine", emoji="🛡️", value="security"),
             discord.SelectOption(label="General & Fun", description="Stats, Info & Polls", emoji="📊", value="general")
@@ -177,14 +178,16 @@ class HelpSelect(discord.ui.Select):
         embed = discord.Embed(color=0x9B59B6, timestamp=discord.utils.utcnow())
         
         if cat == "setup":
-            embed.title = "🛠️ Setup & Configuration"
+            embed.title = "⚙️ Setup & Configuration"
             embed.description = (
                 f"`{prefix}setrole <role>` - Set the auto-join role\n"
                 f"`{prefix}setwelcomechannel <#ch>` - Set where greetings go\n"
+                f"`{prefix}setlogchannel <#ch>` - Set where logs go\n"
                 f"`{prefix}setwelcome <msg>` - Set the join message\n"
                 f"`{prefix}setgoodbye <msg>` - Set the leave message\n"
-                f"`{prefix}setimg <welcome/goodbye> <url>` - Set banners\n"
-                f"`{prefix}setcolor <hex>` - Set embed colors (e.g. #FF00FF)"
+                f"`{prefix}togglewelcome` - Enable/Disable greetings\n"
+                f"`{prefix}setcolor <hex>` - Set embed colors\n"
+                f"`{prefix}testjoin` / `{prefix}testleave` - Test greeting embeds"
             )
         elif cat == "tickets":
             embed.title = "🎟️ Tickets & Helper Applications"
@@ -196,6 +199,8 @@ class HelpSelect(discord.ui.Select):
                 f"This command updates the questions for a specific game application.\n"
                 f"**Usage:** `{prefix}sethelpertext <id> <your questions>`\n"
                 f"**IDs:** `ALS`, `AV`, `ASTD`, `UTD`, `AG`, `AC`, `BL`, `SP`, `ARX`, `AOL`\n"
+                f"**Example:** `{prefix}sethelpertext ALS 1. Rank? 2. Can you solo Cid?`"
+            )
                 f"**Example:** `{prefix}sethelpertext ALS 1. Rank? 2. Can you solo Cid?`"
             )
         elif cat == "boost":
@@ -224,6 +229,8 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setthreshold <sys> <key> <val>` - Config punishment levels\n"
                 f"`{prefix}addscam <link>` - Add to phishing blacklist\n"
                 f"`{prefix}clearscamlog <@user>` - Reset scam strikes\n"
+                f"`{prefix}addswear <word>` - Add word to filter\n"
+                f"`{prefix}removeswear <word>` - Remove word from filter\n"
                 f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
                 f"`{prefix}logwhitelist <add/remove>` - Invisible from logs\n"
                 f"`{prefix}unquarantine <@user>` - Release user from prison"
