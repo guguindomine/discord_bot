@@ -162,11 +162,11 @@ class HelpView(discord.ui.View):
 class HelpSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Setup & Config", description="Basics like greetings & roles", emoji="🛠️", value="setup"),
+            discord.SelectOption(label="Setup & Config", description="Greetings, Roles & Toggles", emoji="🛠️", value="setup"),
             discord.SelectOption(label="Tickets & Apps", description="Support, Macros & Helper Apps", emoji="🎟️", value="tickets"),
-            discord.SelectOption(label="Server Boost", description="Automated boost roles & logs", emoji="💎", value="boost"),
-            discord.SelectOption(label="Moderation", description="Filter & Admin tools", emoji="🛡️", value="mod"),
-            discord.SelectOption(label="General", description="Bot info & stats", emoji="❓", value="general")
+            discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Purge", emoji="🔨", value="mod"),
+            discord.SelectOption(label="Security & Filter", description="Scam detection & Quarantine", emoji="🛡️", value="security"),
+            discord.SelectOption(label="General & Fun", description="Stats, Info & Polls", emoji="📊", value="general")
         ]
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
@@ -208,23 +208,33 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}testboost` - Simulate a boost event"
             )
         elif cat == "mod":
-            embed.title = "🛡️ Moderation & Filter"
+            embed.title = "🔨 Advanced Moderation"
             embed.description = (
                 f"`{prefix}purge <num>` - Delete bulk messages (1-100)\n"
-                f"`{prefix}togglefilter` - Toggle swear detection\n"
-                f"`{prefix}addswear <word>` - Add word to filter\n"
-                f"`{prefix}removeswear <word>` - Remove word from filter\n"
-                f"`{prefix}whitelist <add/remove/list>` - Whitelist users from filter\n"
-                f"`{prefix}setlogchannel <#ch>` - Set channel for logs\n"
+                f"`{prefix}mute <@user> <min>` - Timeout a member\n"
+                f"`{prefix}softban <@user>` - Kick & clear messages\n"
                 f"`{prefix}kick <@user>` - Kick a member\n"
-                f"`{prefix}ban <@user>` - Ban a member"
+                f"`{prefix}ban <@user>` - Ban a member\n"
+                f"`{prefix}quarantine <@user>` - Send to quarantine manually"
+            )
+        elif cat == "security":
+            embed.title = "🛡️ Security & Filter System"
+            embed.description = (
+                f"`{prefix}togglefilter` - Toggle swear detection\n"
+                f"`{prefix}setthreshold <sys> <key> <val>` - Config punishment levels\n"
+                f"`{prefix}addscam <link>` - Add to phishing blacklist\n"
+                f"`{prefix}clearscamlog <@user>` - Reset scam strikes\n"
+                f"`{prefix}addswear <word>` - Add word to filter\n"
+                f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
+                f"`{prefix}logwhitelist <add/remove>` - Invisible from logs"
             )
         elif cat == "general":
-            embed.title = "❓ General Commands"
+            embed.title = "📊 General & Utilities"
             embed.description = (
+                f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
+                f"`{prefix}swearlog [@user]` - View infraction history/top\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
-                f"`{prefix}goodbye` - Send a final farewell\n"
                 f"`{prefix}help paradox` - Open this menu"
             )
 
