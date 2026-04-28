@@ -201,8 +201,6 @@ class HelpSelect(discord.ui.Select):
                 f"**IDs:** `ALS`, `AV`, `ASTD`, `UTD`, `AG`, `AC`, `BL`, `SP`, `ARX`, `AOL`\n"
                 f"**Example:** `{prefix}sethelpertext ALS 1. Rank? 2. Can you solo Cid?`"
             )
-                f"**Example:** `{prefix}sethelpertext ALS 1. Rank? 2. Can you solo Cid?`"
-            )
         elif cat == "boost":
             embed.title = "💎 Server Boosting System"
             embed.description = (
