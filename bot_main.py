@@ -1209,12 +1209,12 @@ async def on_command_error(ctx: commands.Context, error):
 # ══════════════════════════════════════════════
 
 if __name__ == "__main__":
-    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
+    if not TOKEN:
         print("═" * 50)
-        print("  ❌  ERROR: No bot token found!")
-        print("  📂  Locally: Add it to config.json")
-        print("  🚢  Railway: Add DISCORD_TOKEN in variables")
+        print(" ❌ ERROR: DISCORD_TOKEN environment variable not set!")
+        print(" Please set DISCORD_TOKEN in your Railway environment variables.")
         print("═" * 50)
+        exit(1)
     else:
         # Run the bot
         bot.run(TOKEN)
