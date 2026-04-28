@@ -162,12 +162,12 @@ class HelpView(discord.ui.View):
 class HelpSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Setup & Config", description="Greetings, Roles, Logs & Toggles", emoji="⚙️", value="setup"),
-            discord.SelectOption(label="Tickets & Apps", description="Support, Macros & Helper Apps", emoji="🎟️", value="tickets"),
-            discord.SelectOption(label="Server Boost", description="Automated boost roles & logs", emoji="💎", value="boost"),
-            discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Purge", emoji="🔨", value="mod"),
-            discord.SelectOption(label="Security & Filter", description="Scam detection & Quarantine", emoji="🛡️", value="security"),
-            discord.SelectOption(label="General & Fun", description="Stats, Info & Polls", emoji="📊", value="general")
+            discord.SelectOption(label="Setup & Config", description="Greetings, Roles, Logs & Channels", emoji="⚙️", value="setup"),
+            discord.SelectOption(label="Tickets & Apps", description="Support, Macros & Application setup", emoji="🎟️", value="tickets"),
+            discord.SelectOption(label="Server Boost", description="Rewards, Logs & Special Roles", emoji="💎", value="boost"),
+            discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Cleanup", emoji="🔨", value="mod"),
+            discord.SelectOption(label="Security & Filter", description="Anti-Scam, Quarantine & Swear Filter", emoji="🛡️", value="security"),
+            discord.SelectOption(label="General & Stats", description="Polls, Info & Server data", emoji="📊", value="general")
         ]
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
@@ -185,29 +185,27 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setlogchannel <#ch>` - Set where logs go\n"
                 f"`{prefix}setwelcome <msg>` - Set the join message\n"
                 f"`{prefix}setgoodbye <msg>` - Set the leave message\n"
-                f"`{prefix}togglewelcome` - Enable/Disable greetings\n"
+                f"`{prefix}setimg <welcome/goodbye> <url>` - Set banners\n"
                 f"`{prefix}setcolor <hex>` - Set embed colors\n"
+                f"`{prefix}togglewelcome` - Enable/Disable greetings\n"
                 f"`{prefix}testjoin` / `{prefix}testleave` - Test greeting embeds"
             )
         elif cat == "tickets":
             embed.title = "🎟️ Tickets & Helper Applications"
             embed.description = (
-                f"`{prefix}setupticket support` - Setup support buttons\n"
-                f"`{prefix}setupticket macro` - Setup macro buttons\n"
-                f"`{prefix}setupticket helper` - Setup helper app dropdown\n\n"
-                f"**📖 Tutorial: How to use `sethelpertext`**\n"
-                f"This command updates the questions for a specific game application.\n"
-                f"**Usage:** `{prefix}sethelpertext <id> <your questions>`\n"
-                f"**IDs:** `ALS`, `AV`, `ASTD`, `UTD`, `AG`, `AC`, `BL`, `SP`, `ARX`, `AOL`\n"
-                f"**Example:** `{prefix}sethelpertext ALS 1. Rank? 2. Can you solo Cid?`"
+                f"`{prefix}setupticket <support/macro/helper>` - Setup buttons\n"
+                f"`{prefix}setticketcategory <id>` - Set category for new tickets\n"
+                f"`{prefix}sethelpertext <id> <questions>` - Config app forms\n"
+                f"**IDs:** `ALS`, `AV`, `ASTD`, `UTD`, `AG`, `AC`, `BL`, `SP`, `ARX`, `AOL`"
             )
         elif cat == "boost":
             embed.title = "💎 Server Boosting System"
             embed.description = (
                 f"`{prefix}setboostchannel <#ch>` - Set the boost log\n"
                 f"`{prefix}setboostrole <role>` - Set the auto-given role\n"
+                f"`{prefix}setboostmessage <msg>` - Set the boost message\n"
                 f"`{prefix}addboostselectrole <role>` - Add role to selector\n"
-                f"`{prefix}removeboostselectrole <role>` - Remove role from selector\n"
+                f"`{prefix}removeboostselectrole <role>` - Remove from selector\n"
                 f"`{prefix}testboost` - Simulate a boost event"
             )
         elif cat == "mod":
@@ -216,9 +214,10 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}purge <num>` - Delete bulk messages (1-100)\n"
                 f"`{prefix}mute <@user> <min>` - Timeout a member\n"
                 f"`{prefix}softban <@user>` - Kick & clear messages\n"
-                f"`{prefix}kick <@user>` - Kick a member\n"
-                f"`{prefix}ban <@user>` - Ban a member\n"
-                f"`{prefix}quarantine <@user>` - Send to quarantine manually"
+                f"`{prefix}kick <@user> [reason]` - Kick a member\n"
+                f"`{prefix}ban <@user> [reason]` - Ban a member\n"
+                f"`{prefix}quarantine <@user>` - Send to quarantine manually\n"
+                f"`{prefix}goodbye` - Send a final manual farewell"
             )
         elif cat == "security":
             embed.title = "🛡️ Security & Filter System"
@@ -230,11 +229,11 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}addswear <word>` - Add word to filter\n"
                 f"`{prefix}removeswear <word>` - Remove word from filter\n"
                 f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
-                f"`{prefix}logwhitelist <add/remove>` - Invisible from logs\n"
+                f"`{prefix}logwhitelist <add/remove/list>` - Invisible from logs\n"
                 f"`{prefix}unquarantine <@user>` - Release user from prison"
             )
         elif cat == "general":
-            embed.title = "📊 General & Utilities"
+            embed.title = "📊 General & Stats"
             embed.description = (
                 f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
                 f"`{prefix}swearlog [@user]` - View infraction history/top\n"
