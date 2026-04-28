@@ -325,17 +325,18 @@ class HelpSelect(discord.ui.Select):
 
 class HelperTicketView(discord.ui.View):
     """View for the Helper/Carry application dropdown."""
-    def __init__(self):
+    def __init__(self, mode: str = "helper"):
         super().__init__(timeout=None)
-        self.add_item(HelperTicketSelect())
+        self.add_item(HelperTicketSelect(mode=mode))
 
 class HelperTicketSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, mode: str = "helper"):
+        self.mode = mode
         cfg = load_config()
         # Fallback game list if not in config
         games = cfg.get("HELPER_GAMES", {
             "ALS": {"name": "Anime Last Stand (ALS)", "emoji": "⚔️"},
-            "AG": {"name": "Anime Guardians (AG)", "emoji": "👻"},
+            "AG": {"name": "Anime Guardians (AG)", "emoji": "💠"},
             "AC": {"name": "Anime Crusaders (AC)", "emoji": "🗡️"},
             "UTD": {"name": "Universal Tower Defense (UTD)", "emoji": "🌍"},
             "AV": {"name": "Anime Vanguards (AV)", "emoji": "🛡️"},
@@ -361,12 +362,47 @@ class HelperTicketSelect(discord.ui.Select):
         game_data = cfg.get("HELPER_GAMES", {}).get(game_code, {})
         game_name = game_data.get("name", game_code)
         
-        channel_name = f"carry-{game_code.lower()}-{member.name}"
+        # Determine prefix and type
+        if self.mode == "carry":
+            prefix = "carry"
+            ticket_type = "Carry Request"
+            color = 0x3498DB
+            instr_title = "🎮 Carry Request Instructions"
+            instr_text = (
+                f"Hello {member.mention}! You've requested a carry for **{game_name}**.\n\n"
+                "### 📋 Instructions\n"
+                "1. State exactly what you need help with (e.g., 'Raid Floor 5').\n"
+                "2. Wait for an available booster to respond.\n"
+                "3. Once the carry is done, please **Vouch** the booster using the button below!\n\n"
+                "**Please provide your details:**"
+            )
+            form_text = f"1. Roblox Username?\n2. What do you need help with in {game_name}?\n3. What is your Timezone?"
+        else:
+            prefix = "apply"
+            ticket_type = "Helper Application"
+            color = 0xF1C40F
+            instr_title = "📝 Helper Application"
+            instr_text = (
+                f"Hello {member.mention}! Thank you for applying for the **Helper/Booster** role.\n\n"
+                "### 📋 Instructions\n"
+                "1. Answer all questions clearly and honestly.\n"
+                "2. If a question asks for a screenshot (SS), please attach it.\n"
+                "3. Staff will review your application soon. **Do not ping staff.**\n\n"
+                "**Application Form:**"
+            )
+            
+            questions_raw = game_data.get("questions", ["Timezone?", "Roblox Level?", "Image of units?"])
+            if isinstance(questions_raw, list):
+                form_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions_raw)])
+            else:
+                form_text = questions_raw
+
+        channel_name = f"{prefix}-{game_code.lower()}-{member.name}"
         
         # Check for existing
         existing = discord.utils.get(guild.channels, name=channel_name.lower())
         if existing:
-            await interaction.response.send_message(f"⚠️ You already have an open ticket for this game: {existing.mention}", ephemeral=True)
+            await interaction.response.send_message(f"⚠️ You already have an open ticket for this: {existing.mention}", ephemeral=True)
             return
 
         overwrites = {
@@ -379,35 +415,18 @@ class HelperTicketSelect(discord.ui.Select):
             name=channel_name,
             overwrites=overwrites,
             category=interaction.channel.category,
-            reason=f"Carry request for {game_name}"
+            reason=f"{ticket_type} for {game_name}"
         )
-
-        questions_raw = game_data.get("questions", ["Timezone?", "Roblox Level?", "Image of units?"])
         
-        # Handle migration/formatting
-        if isinstance(questions_raw, list):
-            formatted_questions = "\n".join([f"{i+1}. {q}" for i, q in enumerate(questions_raw)])
-        else:
-            # Fallback for old string format
-            formatted_questions = questions_raw
-
         embed = discord.Embed(
-            title=f"🎮 {game_name} | Helper Application",
-            description=(
-                f"Hello {member.mention}! Thank you for applying for the **Helper/Booster** role.\n\n"
-                "### 📋 Instructions\n"
-                "1. Answer all questions clearly and honestly.\n"
-                "2. If a question asks for a screenshot (SS), please attach it.\n"
-                "3. Staff will review your application soon. **Do not ping staff.**\n\n"
-                "**Application Form:**\n"
-                f"```\n{formatted_questions}\n```"
-            ),
-            color=0xF1C40F
+            title=f"🎮 {game_name} | {ticket_type}",
+            description=f"{instr_text}\n```\n{form_text}\n```",
+            color=color
         )
-        embed.set_footer(text="Paradox Bot 💜 Serious Applications Only")
+        embed.set_footer(text=f"Paradox Bot 💜 | {ticket_type}")
         
         await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView())
-        await interaction.response.send_message(f"✅ Created! Check {channel.mention}", ephemeral=True)
+        await interaction.response.send_message(f"✅ Ticket created! Check {channel.mention}", ephemeral=True)
 
 class MacroTicketView(discord.ui.View):
     def __init__(self):
@@ -926,7 +945,7 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
             color=0x2ECC71
         )
         view = MacroTicketView()
-    elif mode in ["helper", "carry"]:
+    elif mode == "carry":
         embed = discord.Embed(
             title="🎮 PARADOX | Carry Requests",
             description=(
@@ -957,7 +976,24 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
         )
         # Use the bot avatar as thumbnail for a professional look
         embed.set_thumbnail(url=bot.user.display_avatar.url)
-        view = HelperTicketView()
+        view = HelperTicketView(mode="carry")
+    elif mode == "helper":
+        embed = discord.Embed(
+            title="📝 Helper Applications",
+            description=(
+                "**Apply to become a Paradox Helper!**\n"
+                "Help our community and earn reputation as a professional booster.\n\n"
+                "⭐ **BOOSTER PERKS**\n"
+                "Get access to exclusive channels, roles, and community trust.\n\n"
+                "⚡ **REQUIREMENTS**\n"
+                "You must have meta units and be active daily to apply.\n\n"
+                "📋 **HOW IT WORKS**\n"
+                "Select your main game below to start your application ticket!"
+            ),
+            color=0xF1C40F
+        )
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+        view = HelperTicketView(mode="helper")
     else:  # Default to support
         embed = discord.Embed(
             title="🎟️ Support Tickets",
