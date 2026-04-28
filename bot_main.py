@@ -74,8 +74,14 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 class TicketControlView(discord.ui.View):
     """View inside a created ticket for closing and vouching."""
-    def __init__(self):
+    def __init__(self, vouch_enabled: bool = False):
         super().__init__(timeout=None)
+        if not vouch_enabled:
+            # Remove the vouch button if not specifically enabled (only for Carries)
+            for item in self.children:
+                if hasattr(item, "custom_id") and item.custom_id == "vouch_ticket":
+                    self.remove_item(item)
+                    break
 
     @discord.ui.button(label="Vouch Staff", style=discord.ButtonStyle.success, custom_id="vouch_ticket", emoji="⭐")
     async def vouch_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -223,7 +229,7 @@ class SupportTicketView(discord.ui.View):
             description=f"Hello {member.mention}! Staff will be with you shortly.\nThis is your private support channel.",
             color=0x3498DB
         )
-        await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView())
+        await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView(vouch_enabled=False))
         await interaction.response.send_message(f"✅ Created! Check {channel.mention}", ephemeral=True)
 
 class HelpView(discord.ui.View):
@@ -425,7 +431,7 @@ class HelperTicketSelect(discord.ui.Select):
         )
         embed.set_footer(text=f"Paradox Bot 💜 | {ticket_type}")
         
-        await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView())
+        await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView(vouch_enabled=(self.mode == "carry")))
         await interaction.response.send_message(f"✅ Ticket created! Check {channel.mention}", ephemeral=True)
 
 class MacroTicketView(discord.ui.View):
@@ -465,7 +471,7 @@ class MacroTicketView(discord.ui.View):
             description=f"Hello {member.mention}! This is your direct channel for Macro support.\nStaff will assist you shortly.",
             color=0x2ECC71
         )
-        await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView())
+        await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView(vouch_enabled=False))
         await interaction.response.send_message(f"✅ Created! Check {channel.mention}", ephemeral=True)
 
 
