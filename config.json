@@ -6,7 +6,7 @@
     "WELCOME_IMAGE_URL": "https://media1.tenor.com/m/Hmk-QGKi0l4AAAAd/mbappe-sweater.gif",
     "GOODBYE_IMAGE_URL": null,
     "WELCOME_COLOR": "#9B59B6",
-    "HELLO_MESSAGE": "WHY NGA WHY",
+    "HELLO_MESSAGE": "Hello",
     "GOODBYE_MESSAGE": "😢 Goodbye! We'll miss you! Hope to see you again soon! 💜",
     "JOIN_MESSAGE": "🎉 **Welcome to the server, {mention}!** 🎉\n\nYou are member **#{count}**!\nMake sure to read the rules and have fun! 💜",
     "LEAVE_MESSAGE": "😢 **{member}** has left the server.\nWe now have **{count}** members.\nHope to see you again! 💜",
