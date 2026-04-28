@@ -12,6 +12,16 @@
 ╚═══════════════════════════════════════════════════════════╝
 """
 
+try:
+    import audioop
+except ImportError:
+    import sys
+    try:
+        import audioop_lts
+        sys.modules['audioop'] = audioop_lts
+    except ImportError:
+        pass
+
 import discord
 from discord.ext import commands
 from datetime import datetime, timedelta
@@ -45,7 +55,7 @@ QUARANTINE_CHANNEL_NAME = "⚖️-contest-punishment"
 config = load_config()
 
 # Load token from environment variable (Railway)
-TOKEN = os.environ.get("DISCORD_TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN")
 PREFIX = os.environ.get("PREFIX") or config.get("PREFIX", "!")
 
 # ──────────────────────────────────────────────
@@ -63,9 +73,72 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 # ══════════════════════════════════════════════
 
 class TicketControlView(discord.ui.View):
-    """View inside a created ticket for closing it."""
+    """View inside a created ticket for closing and vouching."""
     def __init__(self):
         super().__init__(timeout=None)
+
+    @discord.ui.button(label="Vouch Staff", style=discord.ButtonStyle.success, custom_id="vouch_ticket", emoji="⭐")
+    async def vouch_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Fetch participants (who chatted)
+        participants = []
+        async for message in interaction.channel.history(limit=100):
+            if not message.author.bot and message.author.id != interaction.user.id:
+                if message.author not in participants:
+                    participants.append(message.author)
+
+        if not participants:
+            await interaction.response.send_message("⚠️ No other people found in the chat to vouch for!", ephemeral=True)
+            return
+
+        # Show a view with buttons for each participant
+        view = VouchSelectView(participants, interaction.channel)
+        await interaction.response.send_message("🌟 **Who helped you today?** Select a staff member to vouch for:", view=view, ephemeral=True)
+
+class VouchSelectView(discord.ui.View):
+    def __init__(self, participants, channel):
+        super().__init__(timeout=60)
+        self.channel = channel
+        for p in participants[:5]: # Max 5 buttons
+            self.add_item(VouchButton(p, channel))
+
+class VouchButton(discord.ui.Button):
+    def __init__(self, member, channel):
+        super().__init__(label=member.name, style=discord.ButtonStyle.primary, emoji="⭐")
+        self.member = member
+        self.channel = channel
+
+    async def callback(self, interaction: discord.Interaction):
+        cfg = load_config()
+        vouches_data = cfg.get("VOUCHES", {})
+        p_id = str(self.member.id)
+        
+        count = vouches_data.get(p_id, 0) + 1
+        vouches_data[p_id] = count
+        cfg["VOUCHES"] = vouches_data
+        save_config(cfg)
+        
+        level = (count // 5) + 1
+        vouch_channel_id = cfg.get("VOUCH_CHANNEL_ID")
+        
+        if vouch_channel_id:
+            try:
+                vouch_channel = interaction.guild.get_channel(int(vouch_channel_id))
+                if vouch_channel:
+                    embed = discord.Embed(
+                        title="🌟 New Vouch!",
+                        description=f"**{interaction.user.mention}** vouched for **{self.member.mention}** in {self.channel.mention}!",
+                        color=0xF1C40F,
+                        timestamp=discord.utils.utcnow()
+                    )
+                    embed.add_field(name="Staff Member", value=self.member.name, inline=True)
+                    embed.add_field(name="Total Vouches", value=str(count), inline=True)
+                    embed.add_field(name="Vouch Level", value=str(level), inline=True)
+                    embed.set_footer(text="Paradox Bot 💜 | Helper Reputation")
+                    await vouch_channel.send(embed=embed)
+            except: pass
+
+        await interaction.response.send_message(f"✅ You vouched for **{self.member.name}**! They now have **{count}** vouches.", ephemeral=True)
+        self.view.stop()
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket", emoji="🔒")
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -193,8 +266,9 @@ class HelpSelect(discord.ui.Select):
         elif cat == "tickets":
             embed.title = "🎟️ Tickets & Helper Applications"
             embed.description = (
-                f"`{prefix}setupticket <support/macro/helper>` - Setup buttons\n"
-                f"`{prefix}setticketcategory <id>` - Set category for new tickets\n\n"
+                f"`{prefix}setupticket <support/macro/carry>` - Setup buttons\n"
+                f"`{prefix}setticketcategory <id>` - Set category for new tickets\n"
+                f"`{prefix}setvouchchannel <#ch>` - Set where vouches go\n\n"
                 f"**Helper App Config (Advanced):**\n"
                 f"`{prefix}sethelpertext <id> <questions>` - Bulk replace\n"
                 f"`{prefix}sethelpertext <id> q1 Text ; q5 Text` - Target update\n"
@@ -240,6 +314,7 @@ class HelpSelect(discord.ui.Select):
             embed.description = (
                 f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
                 f"`{prefix}swearlog [@user]` - View infraction history/top\n"
+                f"`{prefix}vouches [@user]` - Check your vouch level\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
                 f"`{prefix}help paradox` - Open this menu"
@@ -851,22 +926,37 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
             color=0x2ECC71
         )
         view = MacroTicketView()
-    elif mode == "helper":
+    elif mode in ["helper", "carry"]:
         embed = discord.Embed(
-            title="🎮 PARADOX | Helper Applications",
+            title="🎮 PARADOX | Carry Requests",
             description=(
-                "**Apply to become a Paradox Helper!**\n"
-                "Help our community and earn reputation as a professional booster.\n\n"
-                "⭐ **BOOSTER PERKS**\n"
-                "Get access to exclusive channels, roles, and community trust.\n\n"
-                "⚡ **REQUIREMENTS**\n"
-                "You must have meta units and be active daily to apply.\n\n"
+                "**Welcome to our Carry Service!**\n"
+                "Your reliable place for fast and professional anime carries.\n\n"
+                "🎯 **FREE SERVICE**\n"
+                "We help you complete runs for free — no hidden fees, no premium memberships.\n\n"
+                "👻 **BOOSTER PERKS**\n"
+                "Professional boosters earn reputation through customer vouches and build trust in the community.\n\n"
+                "⚡ **QUICK SUPPORT**\n"
+                "Get connected with experienced boosters usually within minutes. Fast responses & quality service.\n\n"
                 "📋 **HOW IT WORKS**\n"
-                "Select your main game below to start your application ticket!"
+                "Simply select your game from the menu below to start your ticket!\n\n"
+                "🎮 **Supported Games:**\n"
+                "⚔️ Anime Last Stand (ALS)\n"
+                "💠 Anime Guardians (AG)\n"
+                "🗡️ Anime Crusaders (AC)\n"
+                "🌍 Universal Tower Defense (UTD)\n"
+                "🛡️ Anime Vanguards (AV)\n"
+                "💫 Bizarre Lineage (BL)\n"
+                "⛵ Sailor Piece (SP)\n"
+                "🔥 Anime Rangers X (ARX)\n"
+                "⭐ All Star Tower Defense (ASTD)\n"
+                "👑 Anime Overlord (AOL)\n\n"
+                "**Select your game below to get started!**"
             ),
-            color=0xF1C40F
+            color=0x3498DB
         )
-        embed.set_image(url="https://media.discordapp.net/attachments/1111/banner.png") # Placeholder
+        # Use the bot avatar as thumbnail for a professional look
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
         view = HelperTicketView()
     else:  # Default to support
         embed = discord.Embed(
@@ -1842,6 +1932,45 @@ async def remove_boost_select_role(ctx: commands.Context, *, role_name: str):
         await ctx.send(f"✅ Role **{role_name}** removed from the booster selector.")
     else:
         await ctx.send("⚠️ That role was not in the list.")
+
+# ── !setvouchchannel ──────────────────────────
+
+@bot.command(name="setvouchchannel")
+@commands.has_permissions(administrator=True)
+async def set_vouch_channel(ctx: commands.Context, channel: discord.TextChannel):
+    """Set the channel where ticket vouches are logged. Admin only."""
+    cfg = load_config()
+    cfg["VOUCH_CHANNEL_ID"] = channel.id
+    save_config(cfg)
+    await ctx.send(f"✅ Vouch logs will now be sent to {channel.mention}")
+
+# ── !vouches ──────────────────────────────────
+
+@bot.command(name="vouches")
+async def check_vouches(ctx: commands.Context, member: discord.Member = None):
+    """Check how many vouches you or someone else has."""
+    member = member or ctx.author
+    cfg = load_config()
+    vouches = cfg.get("VOUCHES", {}).get(str(member.id), 0)
+    level = (vouches // 5) + 1
+    
+    embed = discord.Embed(
+        title=f"⭐ Vouches for {member.name}",
+        color=0xF1C40F,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Total Vouches", value=str(vouches), inline=True)
+    embed.add_field(name="Level", value=str(level), inline=True)
+    
+    # Progress to next level
+    next_level_vouches = (level * 5)
+    remaining = next_level_vouches - vouches
+    embed.add_field(name="Next Level In", value=f"{remaining} more vouches", inline=False)
+    
+    embed.set_footer(text="Paradox Bot 💜 | Level System")
+    await ctx.send(embed=embed)
+
 
 # ══════════════════════════════════════════════
 #  ERROR HANDLING
