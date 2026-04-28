@@ -199,11 +199,13 @@ class HelpSelect(discord.ui.Select):
             embed.title = "🛡️ Moderation & Filter"
             embed.description = (
                 f"`{prefix}purge <num>` - Delete bulk messages (1-100)\n"
-                f"`{prefix}kick <@user>` - Kick a member\n"
-                f"`{prefix}ban <@user>` - Ban a member\n"
                 f"`{prefix}togglefilter` - Toggle swear detection\n"
                 f"`{prefix}addswear <word>` - Add word to filter\n"
-                f"`{prefix}removeswear <word>` - Remove word from filter"
+                f"`{prefix}removeswear <word>` - Remove word from filter\n"
+                f"`{prefix}whitelist <add/remove/list>` - Whitelist users from filter\n"
+                f"`{prefix}setlogchannel <#ch>` - Set channel for logs\n"
+                f"`{prefix}kick <@user>` - Kick a member\n"
+                f"`{prefix}ban <@user>` - Ban a member"
             )
         elif cat == "general":
             embed.title = "❓ General Commands"
@@ -536,6 +538,14 @@ async def on_message(message: discord.Message):
 
     print(f"  [CHECK] Scanning message from {message.author}: {message.content[:50]}...")
 
+    # Skip moderation for whitelisted users, commands or bot messages
+    whitelisted_users = cfg.get("WHITELISTED_USERS", [])
+    if (message.author.id in whitelisted_users or 
+        message.author.guild_permissions.administrator or 
+        message.content.startswith(PREFIX)):
+        await bot.process_commands(message)
+        return
+
     if swear_filter_on and swear_list and contains_swear(message.content, swear_list):
         # Delete the message
         try:
@@ -567,6 +577,64 @@ async def on_message(message: discord.Message):
 
     # Process commands if no swear words were found
     await bot.process_commands(message)
+
+
+# ── LOGGING EVENTS ───────────────────────────
+
+@bot.event
+async def on_message_delete(message: discord.Message):
+    """Log when a message is deleted."""
+    if message.author.bot:
+        return
+    
+    cfg = load_config()
+    log_channel_id = cfg.get("LOG_CHANNEL_ID")
+    if not log_channel_id:
+        return
+        
+    log_channel = bot.get_channel(int(log_channel_id))
+    if not log_channel:
+        return
+
+    embed = discord.Embed(
+        title="🗑️ Message Deleted",
+        color=0xE74C3C,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Author", value=message.author.mention, inline=True)
+    embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+    embed.add_field(name="Content", value=message.content or "*No text content (likely an embed or image)*", inline=False)
+    embed.set_footer(text=f"User ID: {message.author.id}")
+    
+    await log_channel.send(embed=embed)
+
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    """Log when a message is edited."""
+    if before.author.bot or before.content == after.content:
+        return
+        
+    cfg = load_config()
+    log_channel_id = cfg.get("LOG_CHANNEL_ID")
+    if not log_channel_id:
+        return
+        
+    log_channel = bot.get_channel(int(log_channel_id))
+    if not log_channel:
+        return
+
+    embed = discord.Embed(
+        title="📝 Message Edited",
+        color=0x3498DB,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Author", value=before.author.mention, inline=True)
+    embed.add_field(name="Channel", value=before.channel.mention, inline=True)
+    embed.add_field(name="Before", value=before.content or "*No text content*", inline=False)
+    embed.add_field(name="After", value=after.content or "*No text content*", inline=False)
+    embed.set_footer(text=f"User ID: {before.author.id}")
+    
+    await log_channel.send(embed=embed)
 
 
 # ══════════════════════════════════════════════
@@ -875,7 +943,77 @@ async def set_welcome_channel_cmd(ctx: commands.Context, channel: discord.TextCh
     await ctx.send(f"✅ Welcome & goodbye channel set to {channel.mention}")
 
 
-# ── !addswear ────────────────────────────────
+# ── !setlogchannel ───────────────────────────
+
+@bot.command(name="setlogchannel")
+@commands.has_permissions(administrator=True)
+async def set_log_channel_cmd(ctx: commands.Context, channel: discord.TextChannel):
+    """Set the channel for logs (moderation, edits, deletes). Admin only.
+    Usage: !setlogchannel #channel
+    """
+    cfg = load_config()
+    cfg["LOG_CHANNEL_ID"] = channel.id
+    save_config(cfg)
+    await ctx.send(f"✅ Log channel set to {channel.mention}")
+
+# ── !whitelist ───────────────────────────────
+
+@bot.group(name="whitelist", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def whitelist_grp(ctx: commands.Context):
+    """Manage the swear filter whitelist. Usage: !whitelist <add/remove/list>"""
+    await ctx.send(f"❓ Usage: `{PREFIX}whitelist <add/remove/list> @user`")
+
+@whitelist_grp.command(name="add")
+@commands.has_permissions(administrator=True)
+async def whitelist_add(ctx: commands.Context, member: discord.Member):
+    """Add a user to the swear filter whitelist."""
+    cfg = load_config()
+    whitelist = cfg.get("WHITELISTED_USERS", [])
+    
+    if member.id in whitelist:
+        await ctx.send(f"⚠️ {member.display_name} is already whitelisted.")
+        return
+        
+    whitelist.append(member.id)
+    cfg["WHITELISTED_USERS"] = whitelist
+    save_config(cfg)
+    await ctx.send(f"✅ {member.mention} has been added to the whitelist! They can now bypass the swear filter.")
+
+@whitelist_grp.command(name="remove")
+@commands.has_permissions(administrator=True)
+async def whitelist_remove(ctx: commands.Context, member: discord.Member):
+    """Remove a user from the swear filter whitelist."""
+    cfg = load_config()
+    whitelist = cfg.get("WHITELISTED_USERS", [])
+    
+    if member.id not in whitelist:
+        await ctx.send(f"⚠️ {member.display_name} is not in the whitelist.")
+        return
+        
+    whitelist.remove(member.id)
+    cfg["WHITELISTED_USERS"] = whitelist
+    save_config(cfg)
+    await ctx.send(f"✅ {member.mention} has been removed from the whitelist.")
+
+@whitelist_grp.command(name="list")
+@commands.has_permissions(administrator=True)
+async def whitelist_list(ctx: commands.Context):
+    """List all whitelisted users."""
+    cfg = load_config()
+    whitelist = cfg.get("WHITELISTED_USERS", [])
+    
+    if not whitelist:
+        await ctx.send("ℹ️ The whitelist is currently empty (Administrators bypass it automatically).")
+        return
+        
+    mentions = [f"<@{uid}>" for uid in whitelist]
+    embed = discord.Embed(
+        title="🛡️ Swear Filter Whitelist",
+        description="\n".join(mentions),
+        color=0x3498DB
+    )
+    await ctx.send(embed=embed)
 
 @bot.command(name="addswear")
 @commands.has_permissions(administrator=True)
@@ -1209,12 +1347,12 @@ async def on_command_error(ctx: commands.Context, error):
 # ══════════════════════════════════════════════
 
 if __name__ == "__main__":
-    if not TOKEN:
+    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("═" * 50)
-        print(" ❌ ERROR: DISCORD_TOKEN environment variable not set!")
-        print(" Please set DISCORD_TOKEN in your Railway environment variables.")
+        print("  ❌  ERROR: No bot token found!")
+        print("  📂  Locally: Add it to config.json")
+        print("  🚢  Railway: Add DISCORD_TOKEN in variables")
         print("═" * 50)
-        exit(1)
     else:
         # Run the bot
         bot.run(TOKEN)
