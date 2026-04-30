@@ -1,4 +1,4 @@
-
+{
     "PREFIX": "!",
     "AUTO_ROLE_NAME": "Community Member",
     "WELCOME_CHANNEL_ID": 1498380300785418250,
@@ -6,7 +6,7 @@
     "WELCOME_IMAGE_URL": "https://media1.tenor.com/m/Hmk-QGKi0l4AAAAd/mbappe-sweater.gif",
     "GOODBYE_IMAGE_URL": null,
     "WELCOME_COLOR": "#9B59B6",
-    "HELLO_MESSAGE": "idk",
+    "HELLO_MESSAGE": "123123123",
     "GOODBYE_MESSAGE": "\ud83d\ude22 Goodbye! We'll miss you! Hope to see you again soon! \ud83d\udc9c",
     "JOIN_MESSAGE": "\ud83c\udf89 **Welcome to the server, {mention}!** \ud83c\udf89\n\nYou are member **#{count}**!\nMake sure to read the rules and have fun! \ud83d\udc9c",
     "LEAVE_MESSAGE": "\ud83d\ude22 **{member}** has left the server.\nWe now have **{count}** members.\nHope to see you again! \ud83d\udc9c",
