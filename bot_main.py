@@ -271,6 +271,7 @@ class HelpSelect(discord.ui.Select):
             embed.title = "⚙️ Setup & Configuration"
             embed.description = (
                 f"`{prefix}setrole <role>` - Set the auto-join role\n"
+                f"`{prefix}autorole <role>` - Alias for setrole\n"
                 f"`{prefix}setwelcomechannel <#ch>` - Set where greetings go\n"
                 f"`{prefix}setlogchannel <#ch>` - Set where logs go\n"
                 f"`{prefix}setwelcome <msg>` - Set the join message\n"
@@ -284,6 +285,9 @@ class HelpSelect(discord.ui.Select):
             embed.title = "🎟️ Tickets & Helper Applications"
             embed.description = (
                 f"`{prefix}setupticket <support/macro/carry/helper>` - Setup buttons\n"
+                f"`{prefix}addgame <ID> <Emoji> <Name>` - Add new game\n"
+                f"`{prefix}togglegame <ID>` - Toggle game active\n"
+                f"`{prefix}add / {prefix}remove <@user>` - Add/remove from ticket\n"
                 f"`{prefix}setticketcategory <id>` - Set category for new tickets\n"
                 f"`{prefix}setvouchchannel <#ch>` - Set where vouches go\n\n"
                 f"**Helper App Config (Advanced):**\n"
@@ -332,6 +336,8 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
                 f"`{prefix}swearlog [@user]` - View infraction history/top\n"
                 f"`{prefix}vouches [@user]` - Check your vouch level\n"
+                f"`{prefix}setrank [@user] <lvl>` - Set a user's vouch rank\n"
+                f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
                 f"`{prefix}help paradox` - Open this menu"
@@ -962,6 +968,7 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
             color=0x2ECC71
         )
         view = MacroTicketView()
+    elif mode == "carry":
         cfg = load_config()
         games = cfg.get("HELPER_GAMES", {})
         active_games_text = ""
