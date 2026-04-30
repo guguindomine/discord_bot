@@ -42,6 +42,7 @@ from bot_functions import (
 # ──────────────────────────────────────────────
 import os
 import re
+from bot_database import db
 
 # ── SECURITY CONSTANTS ──
 SCAM_LINKS = [
@@ -122,13 +123,11 @@ class TicketControlView(discord.ui.View):
             return
 
         cfg = load_config()
-        vouches_data = cfg.get("VOUCHES", {})
         p_id = str(self.claimer_id)
         
-        count = vouches_data.get(p_id, 0) + 1
-        vouches_data[p_id] = count
-        cfg["VOUCHES"] = vouches_data
-        save_config(cfg)
+        # Database Update
+        count = await db.get_vouches(p_id) + 1
+        await db.set_vouches(p_id, count)
         
         level = (count // 5) + 1
         vouch_channel_id = cfg.get("VOUCH_CHANNEL_ID")
@@ -499,6 +498,12 @@ class MacroTicketView(discord.ui.View):
 @bot.event
 async def on_ready():
     """Fires when the bot is connected and ready."""
+    
+    # Initialize Database if URI is present
+    mongo_uri = os.getenv("MONGO_URI")
+    if mongo_uri:
+        db.setup(mongo_uri)
+    
     # Register persistent views
     bot.add_view(SupportTicketView())
     bot.add_view(MacroTicketView())
@@ -734,11 +739,7 @@ async def on_message(message: discord.Message):
     if is_scam or (message.mention_everyone and not message.author.guild_permissions.mention_everyone):
         try:
             await message.delete()
-            scam_infractions = cfg.get("SCAM_INFRACTIONS", {})
-            scam_count = scam_infractions.get(user_id, 0) + 1
-            scam_infractions[user_id] = scam_count
-            cfg["SCAM_INFRACTIONS"] = scam_infractions
-            save_config(cfg)
+            scam_count = await db.add_scam_strike(user_id)
 
             scam_cfg = cfg.get("SCAM_THRESHOLDS", {"warn": 1, "mute1": 2, "mute2": 3, "quarantine": 4, "ban": 5})
             
@@ -762,16 +763,14 @@ async def on_message(message: discord.Message):
 
     # 2. SWEAR FILTER
     if swear_filter_on and swear_list and contains_swear(message.content, swear_list):
-        infractions = cfg.get("INFRACTIONS", {})
-        if user_id not in infractions:
-            infractions[user_id] = []
+        user_infs = await db.get_infractions(user_id)
         
         # Cooldown/Reset Check
-        if infractions[user_id]:
-            last_inf = infractions[user_id][-1]
+        if user_infs:
+            last_inf = user_infs[-1]
             last_time = datetime.strptime(last_inf["time"], "%Y-%m-%d %H:%M:%S")
             time_diff = datetime.now() - last_time
-            count_before = len(infractions[user_id])
+            count_before = len(user_infs)
             
             reset_needed = False
             if count_before <= 3 and time_diff > timedelta(minutes=30): reset_needed = True
@@ -779,19 +778,12 @@ async def on_message(message: discord.Message):
             elif count_before >= 5 and time_diff > timedelta(days=1): reset_needed = True
             
             if reset_needed:
-                infractions[user_id] = []
+                await db.clear_infractions(user_id)
+                user_infs = []
 
         # Log new infraction
         word_found = find_swear_word(message.content, swear_list)
-        infractions[user_id].append({
-            "word": word_found,
-            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "channel": message.channel.name
-        })
-        cfg["INFRACTIONS"] = infractions
-        save_config(cfg)
-        
-        count = len(infractions[user_id])
+        count = await db.add_infraction(user_id, word_found, message.channel.name)
         swear_cfg = cfg.get("SWEAR_THRESHOLDS", {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8})
         
         # 1. Action: Silent delete
@@ -1506,13 +1498,10 @@ async def toggle_filter_cmd(ctx: commands.Context):
 @commands.has_permissions(administrator=True)
 async def swear_log_cmd(ctx: commands.Context, member: discord.Member = None):
     """View the history of filtered words. Usage: !swearlog [@user]"""
-    cfg = load_config()
-    infractions = cfg.get("INFRACTIONS", {})
-    
     if member:
         # Show log for specific user
         user_id = str(member.id)
-        user_data = infractions.get(user_id, [])
+        user_data = await db.get_infractions(user_id)
         if not user_data:
             await ctx.send(f"✅ **{member.display_name}** tem um histórico limpo!")
             return
@@ -1529,6 +1518,7 @@ async def swear_log_cmd(ctx: commands.Context, member: discord.Member = None):
         await ctx.send(embed=embed)
     else:
         # Show general stats
+        infractions = await db.get_all_infractions()
         if not infractions:
             await ctx.send("ℹ️ Nenhum palavrão registrado ainda.")
             return
@@ -1620,10 +1610,7 @@ async def apply_quarantine(member: discord.Member, reason: str):
     # Save current roles (excluding @everyone and Quarantined)
     role_ids = [role.id for role in member.roles if not role.is_default() and role.name != QUARANTINE_ROLE_NAME]
     
-    quarantine_data = cfg.get("QUARANTINE_ROLES", {})
-    quarantine_data[str(member.id)] = role_ids
-    cfg["QUARANTINE_ROLES"] = quarantine_data
-    save_config(cfg)
+    await db.save_quarantine_roles(str(member.id), role_ids)
     
     role, ch = await get_or_create_quarantine(guild)
     
@@ -1677,12 +1664,9 @@ async def add_scam_cmd(ctx, link: str):
 @commands.has_permissions(administrator=True)
 async def clear_scam_log_cmd(ctx, member: discord.Member):
     """Reset the scam/phishing infraction count for a user."""
-    cfg = load_config()
-    scam_infractions = cfg.get("SCAM_INFRACTIONS", {})
-    if str(member.id) in scam_infractions:
-        del scam_infractions[str(member.id)]
-        cfg["SCAM_INFRACTIONS"] = scam_infractions
-        save_config(cfg)
+    strikes = await db.get_scam_strikes(str(member.id))
+    if strikes > 0:
+        await db.clear_scam_strikes(str(member.id))
         await ctx.send(f"✅ Histórico de phishing de {member.display_name} foi limpo.")
     else:
         await ctx.send("ℹ️ Este usuário não possui histórico de phishing.")
@@ -1698,8 +1682,7 @@ async def unquarantine_cmd(ctx, member: discord.Member):
         await member.remove_roles(role)
         
         # Restore saved roles
-        quarantine_data = cfg.get("QUARANTINE_ROLES", {})
-        saved_role_ids = quarantine_data.get(str(member.id), [])
+        saved_role_ids = await db.get_quarantine_roles(str(member.id))
         
         roles_to_add = []
         for rid in saved_role_ids:
@@ -1716,11 +1699,8 @@ async def unquarantine_cmd(ctx, member: discord.Member):
         else:
             await ctx.send(f"✅ **{member.display_name}** liberado da quarentena!")
             
-        # Clean up config
-        if str(member.id) in quarantine_data:
-            del quarantine_data[str(member.id)]
-            cfg["QUARANTINE_ROLES"] = quarantine_data
-            save_config(cfg)
+        # Clean up db
+        await db.clear_quarantine_roles(str(member.id))
     else:
         await ctx.send(f"ℹ️ **{member.display_name}** não está na quarentena.")
 
@@ -2007,8 +1987,7 @@ async def set_vouch_channel(ctx: commands.Context, channel: discord.TextChannel)
 async def check_vouches(ctx: commands.Context, member: discord.Member = None):
     """Check how many vouches you or someone else has."""
     member = member or ctx.author
-    cfg = load_config()
-    vouches = cfg.get("VOUCHES", {}).get(str(member.id), 0)
+    vouches = await db.get_vouches(str(member.id))
     level = (vouches // 5) + 1
     
     embed = discord.Embed(
@@ -2076,11 +2055,7 @@ async def setrank_cmd(ctx: commands.Context, member: discord.Member, level: int)
         return
         
     vouches = (level - 1) * 5
-    cfg = load_config()
-    v_data = cfg.get("VOUCHES", {})
-    v_data[str(member.id)] = vouches
-    cfg["VOUCHES"] = v_data
-    save_config(cfg)
+    await db.set_vouches(str(member.id), vouches)
     
     await ctx.send(f"✅ Set **{member.display_name}** to Level **{level}** ({vouches} vouches).")
 
@@ -2092,11 +2067,7 @@ async def setvouches_cmd(ctx: commands.Context, member: discord.Member, vouches:
         await ctx.send("❌ Vouches cannot be negative.")
         return
         
-    cfg = load_config()
-    v_data = cfg.get("VOUCHES", {})
-    v_data[str(member.id)] = vouches
-    cfg["VOUCHES"] = v_data
-    save_config(cfg)
+    await db.set_vouches(str(member.id), vouches)
     
     level = (vouches // 5) + 1
     await ctx.send(f"✅ Set **{member.display_name}** to **{vouches}** vouches (Level {level}).")
@@ -2131,6 +2102,41 @@ async def remove_ticket_user(ctx: commands.Context, member: discord.Member):
     await ctx.channel.set_permissions(member, overwrite=None)
     await ctx.send(f"✅ Removed {member.display_name} from the ticket.")
 
+
+
+@bot.command(name="migrate")
+@commands.has_permissions(administrator=True)
+async def migrate_cmd(ctx: commands.Context, arg: str = None):
+    """Migrate data from config.json to MongoDB. Usage: !migrate db"""
+    if arg != "db":
+        await ctx.send("❓ Usage: `!migrate db`")
+        return
+        
+    cfg = load_config()
+    await ctx.send("🔄 Starting database migration...")
+    
+    # Migrate Vouches
+    vouches = cfg.get("VOUCHES", {})
+    for uid, count in vouches.items():
+        await db.set_vouches(uid, count)
+        
+    # Migrate Scam Strikes
+    scams = cfg.get("SCAM_INFRACTIONS", {})
+    for uid, count in scams.items():
+        for _ in range(count):
+            await db.add_scam_strike(uid)
+            
+    # Migrate Infractions
+    infractions = cfg.get("INFRACTIONS", {})
+    for uid, inf_list in infractions.items():
+        await db.set_infractions(uid, inf_list)
+        
+    # Migrate Quarantine
+    quarantine = cfg.get("QUARANTINE_ROLES", {})
+    for uid, roles in quarantine.items():
+        await db.save_quarantine_roles(uid, roles)
+        
+    await ctx.send("✅ Migration complete! All user data has been transferred to MongoDB.")
 
 # ══════════════════════════════════════════════
 #  ERROR HANDLING
