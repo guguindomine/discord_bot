@@ -293,7 +293,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}sethelpertext <id> <questions>` - Bulk replace\n"
                 f"`{prefix}sethelpertext <id> q1 Text ; q5 Text` - Target update\n"
                 f"`{prefix}sethelpertext <id> q3 remove` - Delete question 3\n"
-                f"**IDs:** `ALS`, `AV`, `ASTD`, `UTD`, `AG`, `AC`, `BL`, `SP`, `ARX`, `AOL`"
+                f"**IDs:** `{', '.join(load_config().get('HELPER_GAMES', {}).keys())}`"
             )
         elif cat == "boost":
             embed.title = "💎 Server Boosting System"
@@ -325,6 +325,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}clearscamlog <@user>` - Reset scam strikes\n"
                 f"`{prefix}addswear <word>` - Add word to filter\n"
                 f"`{prefix}removeswear <word>` - Remove word from filter\n"
+                f"`{prefix}migrate db` - Move JSON data to Database\n"
                 f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
                 f"`{prefix}logwhitelist <add/remove/list>` - Invisible from logs\n"
                 f"`{prefix}unquarantine <@user>` - Release user from prison"
@@ -335,6 +336,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
                 f"`{prefix}swearlog [@user]` - View infraction history/top\n"
                 f"`{prefix}vouches [@user]` - Check your vouch level\n"
+                f"`{prefix}addrank [@user] <lvl>` - Add to a user's level\n"
                 f"`{prefix}setrank [@user] <lvl>` - Set a user's vouch rank\n"
                 f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
@@ -2058,6 +2060,23 @@ async def setrank_cmd(ctx: commands.Context, member: discord.Member, level: int)
     await db.set_vouches(str(member.id), vouches)
     
     await ctx.send(f"✅ Set **{member.display_name}** to Level **{level}** ({vouches} vouches).")
+
+@bot.command(name="addrank")
+@commands.has_permissions(administrator=True)
+async def addrank_cmd(ctx: commands.Context, member: discord.Member, levels: int):
+    """Add levels to a member's rank manually."""
+    if levels < 1:
+        await ctx.send("❌ You must add at least 1 level.")
+        return
+        
+    current_vouches = await db.get_vouches(str(member.id))
+    current_level = (current_vouches // 5) + 1
+    
+    new_level = current_level + levels
+    new_vouches = (new_level - 1) * 5
+    
+    await db.set_vouches(str(member.id), new_vouches)
+    await ctx.send(f"✅ Added **{levels}** levels to **{member.display_name}**. They are now Level **{new_level}**.")
 
 @bot.command(name="setvouches")
 @commands.has_permissions(administrator=True)
