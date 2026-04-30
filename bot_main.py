@@ -73,78 +73,57 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 # ══════════════════════════════════════════════
 
 class TicketControlView(discord.ui.View):
-    """View inside a created ticket for closing and vouching."""
-    def __init__(self, vouch_enabled: bool = False, vouched: bool = False):
+    """View inside a created ticket for claiming, closing, and vouching."""
+    def __init__(self, vouch_enabled: bool = False, claimer_id: int = None, vouched: bool = False):
         super().__init__(timeout=None)
-        to_remove = []
-        for item in self.children:
-            custom_id = getattr(item, "custom_id", None)
+        self.vouch_enabled = vouch_enabled
+        self.claimer_id = claimer_id
+        self.vouched = vouched
+
+        if not claimer_id:
+            # Unclaimed
+            btn_claim = discord.ui.Button(label="Claim Ticket", style=discord.ButtonStyle.primary, custom_id="claim_ticket", emoji="🙋")
+            btn_claim.callback = self.claim_ticket
+            self.add_item(btn_claim)
+        elif vouch_enabled and not vouched:
+            # Claimed, Vouch enabled, not vouched
+            btn_vouch = discord.ui.Button(label="Vouch Staff", style=discord.ButtonStyle.success, custom_id="vouch_ticket", emoji="⭐")
+            btn_vouch.callback = self.vouch_ticket
+            self.add_item(btn_vouch)
             
-            if not vouch_enabled:
-                # Support/Helper: Hide Vouch, Keep Close
-                if custom_id == "vouch_ticket":
-                    to_remove.append(item)
-            else:
-                # Carry Ticket
-                if not vouched:
-                    # Not vouched: Hide Close, Keep Vouch
-                    if custom_id == "close_ticket":
-                        to_remove.append(item)
-                else:
-                    # Vouched: Hide Vouch, Keep Close
-                    if custom_id == "vouch_ticket":
-                        to_remove.append(item)
+        # Always have Close button
+        btn_close = discord.ui.Button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket", emoji="🔒")
+        btn_close.callback = self.close_ticket
+        self.add_item(btn_close)
+
+    async def claim_ticket(self, interaction: discord.Interaction):
+        # Only users with manage_channels (mods) can claim
+        if not interaction.user.guild_permissions.manage_channels:
+            await interaction.response.send_message("❌ Only staff can claim tickets!", ephemeral=True)
+            return
+            
+        self.claimer_id = interaction.user.id
         
-        for item in to_remove:
-            self.remove_item(item)
+        # We can update the message
+        await interaction.response.send_message(f"✅ Ticket claimed by {interaction.user.mention}!")
+        
+        # Update view
+        new_view = TicketControlView(vouch_enabled=self.vouch_enabled, claimer_id=self.claimer_id, vouched=False)
+        await interaction.message.edit(view=new_view)
 
-    @discord.ui.button(label="Vouch Staff", style=discord.ButtonStyle.success, custom_id="vouch_ticket", emoji="⭐")
-    async def vouch_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Fetch participants (who chatted)
-        participants = []
-        async for message in interaction.channel.history(limit=100):
-            if not message.author.bot and message.author.id != interaction.user.id:
-                if message.author not in participants:
-                    participants.append(message.author)
-
-        if not participants:
-            await interaction.response.send_message("⚠️ No other people found in the chat to vouch for!", ephemeral=True)
+    async def vouch_ticket(self, interaction: discord.Interaction):
+        # Vouch the claimer
+        if not self.claimer_id:
+            await interaction.response.send_message("⚠️ This ticket hasn't been claimed yet!", ephemeral=True)
+            return
+            
+        if interaction.user.id == self.claimer_id:
+            await interaction.response.send_message("❌ You cannot vouch yourself!", ephemeral=True)
             return
 
-        # Show a view with buttons for each participant
-        # We pass the original message so we can edit it later
-        view = VouchSelectView(participants, interaction.channel, interaction.message)
-        await interaction.response.send_message("🌟 **Who helped you today?** Select a staff member to vouch for:", view=view, ephemeral=True)
-
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket", emoji="🔒")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
-        import asyncio
-        await asyncio.sleep(5)
-        try:
-            await interaction.channel.delete()
-        except Exception as e:
-            print(f"Failed to delete ticket: {e}")
-
-class VouchSelectView(discord.ui.View):
-    def __init__(self, participants, channel, original_msg):
-        super().__init__(timeout=60)
-        self.channel = channel
-        self.original_msg = original_msg
-        for p in participants[:5]: # Max 5 buttons
-            self.add_item(VouchButton(p, channel, original_msg))
-
-class VouchButton(discord.ui.Button):
-    def __init__(self, member, channel, original_msg):
-        super().__init__(label=member.name, style=discord.ButtonStyle.primary, emoji="⭐")
-        self.member = member
-        self.channel = channel
-        self.original_msg = original_msg
-
-    async def callback(self, interaction: discord.Interaction):
         cfg = load_config()
         vouches_data = cfg.get("VOUCHES", {})
-        p_id = str(self.member.id)
+        p_id = str(self.claimer_id)
         
         count = vouches_data.get(p_id, 0) + 1
         vouches_data[p_id] = count
@@ -154,31 +133,43 @@ class VouchButton(discord.ui.Button):
         level = (count // 5) + 1
         vouch_channel_id = cfg.get("VOUCH_CHANNEL_ID")
         
+        member = interaction.guild.get_member(self.claimer_id)
+        member_name = member.name if member else f"ID: {self.claimer_id}"
+        member_mention = member.mention if member else f"<@{self.claimer_id}>"
+        
         if vouch_channel_id:
             try:
                 vouch_channel = interaction.guild.get_channel(int(vouch_channel_id))
                 if vouch_channel:
                     embed = discord.Embed(
                         title="🌟 New Vouch!",
-                        description=f"**{interaction.user.mention}** vouched for **{self.member.mention}** in {self.channel.mention}!",
+                        description=f"**{interaction.user.mention}** vouched for **{member_mention}** in {interaction.channel.mention}!",
                         color=0xF1C40F,
                         timestamp=discord.utils.utcnow()
                     )
-                    embed.add_field(name="Staff Member", value=self.member.name, inline=True)
+                    embed.add_field(name="Staff Member", value=member_name, inline=True)
                     embed.add_field(name="Total Vouches", value=str(count), inline=True)
                     embed.add_field(name="Vouch Level", value=str(level), inline=True)
                     embed.set_footer(text="Paradox Bot 💜 | Helper Reputation")
                     await vouch_channel.send(embed=embed)
             except: pass
 
-        await interaction.response.send_message(f"✅ You vouched for **{self.member.name}**! They now have **{count}** vouches.", ephemeral=True)
+        await interaction.response.send_message(f"✅ You vouched for **{member_name}**! They now have **{count}** vouches.", ephemeral=True)
         
-        # NOW: Update the original message to show the CLOSE button
+        # Update view to disable vouching
+        new_view = TicketControlView(vouch_enabled=self.vouch_enabled, claimer_id=self.claimer_id, vouched=True)
         try:
-            await self.original_msg.edit(view=TicketControlView(vouch_enabled=True, vouched=True))
+            await interaction.message.edit(view=new_view)
         except: pass
-        
-        self.view.stop()
+
+    async def close_ticket(self, interaction: discord.Interaction):
+        await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
+        import asyncio
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete()
+        except Exception as e:
+            print(f"Failed to delete ticket: {e}")
 
 class BoostRoleView(discord.ui.View):
     """Dropdown for boosters to pick a role."""
@@ -374,8 +365,8 @@ class HelperTicketSelect(discord.ui.Select):
         })
         
         options = [
-            discord.SelectOption(label=data["name"], value=code, emoji=data["emoji"])
-            for code, data in games.items()
+            discord.SelectOption(label=data["name"], value=code, emoji=data.get("emoji", "🎮"))
+            for code, data in games.items() if data.get("active", True)
         ]
         super().__init__(placeholder="Select a game to start your ticket!", min_values=1, max_values=1, options=options, custom_id="helper_ticket_select")
 
@@ -971,7 +962,13 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
             color=0x2ECC71
         )
         view = MacroTicketView()
-    elif mode == "carry":
+        cfg = load_config()
+        games = cfg.get("HELPER_GAMES", {})
+        active_games_text = ""
+        for code, data in games.items():
+            if data.get("active", True):
+                active_games_text += f"{data.get('emoji', '🎮')} {data.get('name', code)}\n"
+                
         embed = discord.Embed(
             title="🎮 PARADOX | Carry Requests",
             description=(
@@ -986,16 +983,7 @@ async def setup_ticket_cmd(ctx: commands.Context, mode: str = "support"):
                 "📋 **HOW IT WORKS**\n"
                 "Simply select your game from the menu below to start your ticket!\n\n"
                 "🎮 **Supported Games:**\n"
-                "⚔️ Anime Last Stand (ALS)\n"
-                "💠 Anime Guardians (AG)\n"
-                "🗡️ Anime Crusaders (AC)\n"
-                "🌍 Universal Tower Defense (UTD)\n"
-                "🛡️ Anime Vanguards (AV)\n"
-                "💫 Bizarre Lineage (BL)\n"
-                "⛵ Sailor Piece (SP)\n"
-                "🔥 Anime Rangers X (ARX)\n"
-                "⭐ All Star Tower Defense (ASTD)\n"
-                "👑 Anime Overlord (AOL)\n\n"
+                f"{active_games_text}\n"
                 "**Select your game below to get started!**"
             ),
             color=0x3498DB
@@ -2032,6 +2020,109 @@ async def check_vouches(ctx: commands.Context, member: discord.Member = None):
     
     embed.set_footer(text="Paradox Bot 💜 | Level System")
     await ctx.send(embed=embed)
+# ── !addgame & !togglegame ────────────────────
+
+@bot.command(name="addgame")
+@commands.has_permissions(administrator=True)
+async def addgame_cmd(ctx: commands.Context, game_id: str, emoji: str, *, name: str):
+    """Add a new game to the ticket system. Usage: !addgame ID Emoji Full Name"""
+    game_id = game_id.upper()
+    cfg = load_config()
+    games = cfg.get("HELPER_GAMES", {})
+    games[game_id] = {
+        "name": name,
+        "emoji": emoji,
+        "questions": "1. Roblox Username?\n2. What do you need help with?\n3. Timezone?",
+        "active": True
+    }
+    cfg["HELPER_GAMES"] = games
+    save_config(cfg)
+    await ctx.send(f"✅ Game **{name}** ({game_id}) added and set to active!")
+
+@bot.command(name="togglegame")
+@commands.has_permissions(administrator=True)
+async def togglegame_cmd(ctx: commands.Context, game_id: str):
+    """Toggle whether a game is active in the ticket menus."""
+    game_id = game_id.upper()
+    cfg = load_config()
+    games = cfg.get("HELPER_GAMES", {})
+    if game_id not in games:
+        await ctx.send(f"❌ Game `{game_id}` not found.")
+        return
+    
+    current_status = games[game_id].get("active", True)
+    games[game_id]["active"] = not current_status
+    cfg["HELPER_GAMES"] = games
+    save_config(cfg)
+    
+    status_text = "🟢 Active" if not current_status else "🔴 Inactive"
+    await ctx.send(f"✅ Game **{games[game_id]['name']}** is now {status_text}.")
+
+# ── !setrank & !setvouches & !autorole ────────
+
+@bot.command(name="setrank")
+@commands.has_permissions(administrator=True)
+async def setrank_cmd(ctx: commands.Context, member: discord.Member, level: int):
+    """Set a member's rank/level manually. Vouches will be calculated."""
+    if level < 1:
+        await ctx.send("❌ Level must be 1 or higher.")
+        return
+        
+    vouches = (level - 1) * 5
+    cfg = load_config()
+    v_data = cfg.get("VOUCHES", {})
+    v_data[str(member.id)] = vouches
+    cfg["VOUCHES"] = v_data
+    save_config(cfg)
+    
+    await ctx.send(f"✅ Set **{member.display_name}** to Level **{level}** ({vouches} vouches).")
+
+@bot.command(name="setvouches")
+@commands.has_permissions(administrator=True)
+async def setvouches_cmd(ctx: commands.Context, member: discord.Member, vouches: int):
+    """Set a member's exact vouch count manually."""
+    if vouches < 0:
+        await ctx.send("❌ Vouches cannot be negative.")
+        return
+        
+    cfg = load_config()
+    v_data = cfg.get("VOUCHES", {})
+    v_data[str(member.id)] = vouches
+    cfg["VOUCHES"] = v_data
+    save_config(cfg)
+    
+    level = (vouches // 5) + 1
+    await ctx.send(f"✅ Set **{member.display_name}** to **{vouches}** vouches (Level {level}).")
+
+@bot.command(name="autorole")
+@commands.has_permissions(administrator=True)
+async def autorole_alias(ctx: commands.Context, *, role_name: str):
+    """Alias for !setrole"""
+    await set_role_cmd(ctx, role_name=role_name)
+
+# ── !add & !remove (Ticket Management) ────────
+
+@bot.command(name="add")
+@commands.has_permissions(manage_channels=True)
+async def add_ticket_user(ctx: commands.Context, member: discord.Member):
+    """Add a user to the current ticket."""
+    if "support-" not in ctx.channel.name and "macro-" not in ctx.channel.name and "carry-" not in ctx.channel.name and "apply-" not in ctx.channel.name:
+        await ctx.send("❌ This command can only be used in tickets.")
+        return
+        
+    await ctx.channel.set_permissions(member, read_messages=True, send_messages=True, embed_links=True, attach_files=True)
+    await ctx.send(f"✅ Added {member.mention} to the ticket.")
+
+@bot.command(name="remove")
+@commands.has_permissions(manage_channels=True)
+async def remove_ticket_user(ctx: commands.Context, member: discord.Member):
+    """Remove a user from the current ticket."""
+    if "support-" not in ctx.channel.name and "macro-" not in ctx.channel.name and "carry-" not in ctx.channel.name and "apply-" not in ctx.channel.name:
+        await ctx.send("❌ This command can only be used in tickets.")
+        return
+        
+    await ctx.channel.set_permissions(member, overwrite=None)
+    await ctx.send(f"✅ Removed {member.display_name} from the ticket.")
 
 
 # ══════════════════════════════════════════════
