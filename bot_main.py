@@ -746,19 +746,19 @@ async def on_message(message: discord.Message):
             scam_cfg = cfg.get("SCAM_THRESHOLDS", {"warn": 1, "mute1": 2, "mute2": 3, "quarantine": 4, "ban": 5})
             
             if scam_count == scam_cfg.get("warn"):
-                await message.channel.send(f"⚠️ {message.author.mention}, links de phishing são proibidos! (Aviso 1)", delete_after=15)
+                await message.channel.send(f"⚠️ {message.author.mention}, phishing links are prohibited! (Warning 1)", delete_after=15)
             elif scam_count == scam_cfg.get("mute1"):
                 await message.author.timeout(timedelta(hours=1), reason="Scam Strike 2")
-                await message.channel.send(f"🔇 {message.author.mention} silenciado por 1h (Scam Strike 2)", delete_after=15)
+                await message.channel.send(f"🔇 {message.author.mention} timed out for 1h (Scam Strike 2)", delete_after=15)
             elif scam_count == scam_cfg.get("mute2"):
                 await message.author.timeout(timedelta(days=1), reason="Scam Strike 3")
-                await message.channel.send(f"🔇 {message.author.mention} silenciado por 1 dia (Scam Strike 3)", delete_after=15)
+                await message.channel.send(f"🔇 {message.author.mention} timed out for 1 day (Scam Strike 3)", delete_after=15)
             elif scam_count == scam_cfg.get("quarantine"):
                 await apply_quarantine(message.author, "Scam Strikes")
-                await message.channel.send(f"⚖️ {message.author.mention} enviado para Quarentena (Scam Strike 4)", delete_after=15)
+                await message.channel.send(f"⚖️ {message.author.mention} sent to Quarantine (Scam Strike 4)", delete_after=15)
             elif scam_count >= scam_cfg.get("ban"):
                 await message.author.ban(reason="Scam Strikes Limit")
-                await message.channel.send(f"🚫 {message.author.name} banido por links de phishing.")
+                await message.channel.send(f"🚫 {message.author.name} has been banned for phishing links.")
             return 
         except Exception as e:
             print(f"  [ERROR] Scam detection failed: {e}")
@@ -811,15 +811,15 @@ async def on_message(message: discord.Message):
             punishment_msg = ""
             try:
                 if count == swear_cfg.get("warn1"):
-                    punishment_msg = "⚠️ Este é seu **1º aviso**. Mantenha o respeito!"
+                    punishment_msg = "⚠️ This is your **1st warning**. Please keep it respectful!"
                 elif count == swear_cfg.get("warn2"):
-                    punishment_msg = "⚠️ Este é seu **2º aviso**. O próximo resultará em castigo!"
+                    punishment_msg = "⚠️ This is your **2nd warning**. The next one will result in a timeout!"
                 elif count == swear_cfg.get("mute"):
                     await message.author.timeout(timedelta(minutes=1), reason="Swear Strike")
-                    punishment_msg = "🔇 Você foi castigado por **1 minuto**."
+                    punishment_msg = "🔇 You have been timed out for **1 minute**."
                 elif count >= swear_cfg.get("quarantine"):
                     await apply_quarantine(message.author, "Swear Strikes")
-                    punishment_msg = "⚖️ Você foi enviado para a **Quarentena** por excesso de avisos."
+                    punishment_msg = "⚖️ You have been sent to **Quarantine** due to excessive warnings."
             except: pass
 
             warn_msg = f"⚠️ {message.author.mention}, watch your language!"
@@ -1471,6 +1471,72 @@ async def add_swear_cmd(ctx: commands.Context, *, word: str):
 
 # ── !removeswear ─────────────────────────────
 
+class PollView(discord.ui.View):
+    def __init__(self, timeout=None, question=""):
+        super().__init__(timeout=timeout)
+        self.likes = 0
+        self.dislikes = 0
+        self.voters = set()
+        self.question = question
+        self.message = None
+
+    async def on_timeout(self):
+        if self.message:
+            for item in self.children:
+                item.disabled = True
+            
+            embed = discord.Embed(title="🗳️ Poll Ended", color=0x34495E, timestamp=discord.utils.utcnow())
+            embed.description = f"**{self.question}**\n\n**Final Results:**\n👍 Agree: **{self.likes}**\n👎 Disagree: **{self.dislikes}**"
+            try:
+                await self.message.edit(embed=embed, view=self)
+            except: pass
+
+    @discord.ui.button(label="Agree (0)", style=discord.ButtonStyle.success, emoji="👍", custom_id="poll_like")
+    async def like(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.voters:
+            await interaction.response.send_message("❌ You have already voted in this poll!", ephemeral=True)
+            return
+        self.likes += 1
+        self.voters.add(interaction.user.id)
+        button.label = f"Agree ({self.likes})"
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="Disagree (0)", style=discord.ButtonStyle.danger, emoji="👎", custom_id="poll_dislike")
+    async def dislike(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.voters:
+            await interaction.response.send_message("❌ You have already voted in this poll!", ephemeral=True)
+            return
+        self.dislikes += 1
+        self.voters.add(interaction.user.id)
+        button.label = f"Disagree ({self.dislikes})"
+        await interaction.response.edit_message(view=self)
+
+@bot.command(name="poll")
+async def poll_cmd(ctx: commands.Context, question: str, duration: str = "60"):
+    """Create a poll. Usage: !poll "Question" [time] (e.g. 1h, 30m, 1d)"""
+    from bot_functions import parse_duration, format_duration
+    
+    time_seconds = parse_duration(duration)
+    readable_time = format_duration(time_seconds)
+    
+    embed = discord.Embed(
+        title="🗳️ Paradox Poll",
+        description=f"**{question}**\n\nVote using the buttons below!",
+        color=0x9B59B6,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+    embed.set_footer(text=f"Poll duration: {readable_time}")
+    
+    view = PollView(timeout=time_seconds, question=question)
+    msg = await ctx.send(embed=embed, view=view)
+    view.message = msg
+    
+    try:
+        await ctx.message.delete()
+    except:
+        pass
+
 @bot.command(name="removeswear")
 @commands.has_permissions(administrator=True)
 async def remove_swear_cmd(ctx: commands.Context, *, word: str):
@@ -1517,82 +1583,40 @@ async def swear_log_cmd(ctx: commands.Context, member: discord.Member = None):
         user_id = str(member.id)
         user_data = await db.get_infractions(user_id)
         if not user_data:
-            await ctx.send(f"✅ **{member.display_name}** tem um histórico limpo!")
+            await ctx.send(f"✅ **{member.display_name}** has a clean history!")
             return
             
-        embed = discord.Embed(title=f"🚨 Histórico: {member.display_name}", color=0xE74C3C)
+        embed = discord.Embed(title=f"🚨 History: {member.display_name}", color=0xE74C3C)
         embed.set_thumbnail(url=member.display_avatar.url)
         
         text = ""
         for i, inf in enumerate(user_data[-10:], 1): # Show last 10
-            text += f"{i}. `{inf['word']}` em {inf['time']} (#{inf['channel']})\n"
+            text += f"{i}. `{inf['word']}` at {inf['time']} (#{inf['channel']})\n"
         
         embed.description = text
-        embed.set_footer(text=f"Total de infrações: {len(user_data)}")
+        embed.set_footer(text=f"Total infractions: {len(user_data)}")
         await ctx.send(embed=embed)
     else:
         # Show general stats
         infractions = await db.get_all_infractions()
         if not infractions:
-            await ctx.send("ℹ️ Nenhum palavrão registrado ainda.")
+            await ctx.send("ℹ️ No swear words recorded yet.")
             return
             
-        embed = discord.Embed(title="📊 Top Infratores", color=0xE74C3C)
+        embed = discord.Embed(title="📊 Top Offenders", color=0xE74C3C)
         sorted_inf = sorted(infractions.items(), key=lambda x: len(x[1]), reverse=True)
         
         text = ""
         for i, (uid, data) in enumerate(sorted_inf[:10], 1):
             user = bot.get_user(int(uid))
             name = user.name if user else f"ID: {uid}"
-            text += f"{i}. **{name}**: {len(data)} infrações\n"
+            text += f"{i}. **{name}**: {len(data)} infractions\n"
         
-        embed.description = text or "Nenhum dado disponível."
+        embed.description = text or "No data available."
         await ctx.send(embed=embed)
 
 
-# ── !poll ───────────────────────────────────
 
-class PollView(discord.ui.View):
-    def __init__(self, timeout=None):
-        super().__init__(timeout=timeout)
-        self.likes = 0
-        self.dislikes = 0
-        self.voters = set()
-
-    @discord.ui.button(label="Concordo (0)", style=discord.ButtonStyle.success, emoji="👍", custom_id="poll_like")
-    async def like(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id in self.voters:
-            await interaction.response.send_message("❌ Você já votou nesta enquete!", ephemeral=True)
-            return
-        self.likes += 1
-        self.voters.add(interaction.user.id)
-        button.label = f"Concordo ({self.likes})"
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(label="Discordo (0)", style=discord.ButtonStyle.danger, emoji="👎", custom_id="poll_dislike")
-    async def dislike(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id in self.voters:
-            await interaction.response.send_message("❌ Você já votou nesta enquete!", ephemeral=True)
-            return
-        self.dislikes += 1
-        self.voters.add(interaction.user.id)
-        button.label = f"Discordo ({self.dislikes})"
-        await interaction.response.edit_message(view=self)
-
-@bot.command(name="poll")
-async def poll_cmd(ctx: commands.Context, question: str, time: int = 60):
-    """Create a poll. Usage: !poll "Sua pergunta" [tempo_segundos]"""
-    embed = discord.Embed(
-        title="🗳️ Enquete Paradox",
-        description=f"**{question}**\n\nVote usando os botões abaixo!",
-        color=0x9B59B6,
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
-    embed.set_footer(text=f"Enquete dura {time}s")
-    
-    msg = await ctx.send(embed=embed, view=PollView(timeout=time))
-    await ctx.message.delete()
 
 # ── SECURITY: QUARANTINE SYSTEM ──
 
@@ -1613,7 +1637,7 @@ async def get_or_create_quarantine(guild):
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
         }
         channel = await guild.create_text_channel(name=QUARANTINE_CHANNEL_NAME, overwrites=overwrites)
-        await channel.send("⚠️ **Você foi colocado em quarentena.**\nFale com os moderadores aqui para contestar sua punição.")
+        await channel.send("⚠️ **You have been placed in quarantine.**\nSpeak with the moderators here to appeal your punishment.")
     return role, channel
 
 async def apply_quarantine(member: discord.Member, reason: str):
@@ -2067,14 +2091,14 @@ async def setrole_cmd(ctx: commands.Context, member: discord.Member, *, role: di
     try:
         if role in member.roles:
             await member.remove_roles(role)
-            await ctx.send(f"✅ Removido o cargo **{role.name}** de {member.mention}")
+            await ctx.send(f"✅ Removed the role **{role.name}** from {member.mention}")
         else:
             await member.add_roles(role)
-            await ctx.send(f"✅ Adicionado o cargo **{role.name}** para {member.mention}")
+            await ctx.send(f"✅ Added the role **{role.name}** to {member.mention}")
     except discord.Forbidden:
-        await ctx.send("❌ Eu não tenho permissão para gerenciar este cargo (ele pode estar acima do meu topo).")
+        await ctx.send("❌ I don't have permission to manage this role (it might be higher than my top role).")
     except Exception as e:
-        await ctx.send(f"❌ Ocorreu um erro: {e}")
+        await ctx.send(f"❌ An error occurred: {e}")
 
 @bot.command(name="listroles")
 @commands.has_permissions(manage_roles=True)
@@ -2093,13 +2117,13 @@ async def list_roles_cmd(ctx: commands.Context):
             reason = "(Acima do bot)" if role >= bot_top_role else "(Integração)"
             unmanageable.append(f"❌ {role.name} {reason}")
 
-    embed = discord.Embed(title="🎭 Cargos do Servidor", color=0x3498DB)
+    embed = discord.Embed(title="🎭 Server Roles", color=0x3498DB)
     if manageable:
-        embed.add_field(name="Pode Gerenciar", value="\n".join(manageable[:25]) or "Nenhum", inline=False)
+        embed.add_field(name="Can Manage", value="\n".join(manageable[:25]) or "None", inline=False)
     if unmanageable:
-        embed.add_field(name="Não Pode Gerenciar", value="\n".join(unmanageable[:25]) or "Nenhum", inline=False)
+        embed.add_field(name="Cannot Manage", value="\n".join(unmanageable[:25]) or "None", inline=False)
     
-    embed.set_footer(text=f"Total: {len(ctx.guild.roles)-1} cargos")
+    embed.set_footer(text=f"Total: {len(ctx.guild.roles)-1} roles")
     await ctx.send(embed=embed)
 
 @bot.command(name="setvouches")
