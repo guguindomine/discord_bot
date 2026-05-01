@@ -392,8 +392,11 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}roulette <bet> <red/black/green/num>` - Roulette\n\n"
                 f"**Crime:**\n"
                 f"`{prefix}crime` - Quick random crime (60s cooldown)\n"
-                f"`{prefix}heist` - Strategic crime (choose difficulty)\n"
-                f"`{prefix}steal <@user>` - Rob someone's wallet\n\n"
+                f"`{prefix}heist` - Strategic crime with minigames (lockpick/circuit/safe)\n"
+                f"`{prefix}steal <@user>` - Rob someone's wallet\n"
+                f"`{prefix}bail` - Pay to get out of jail early (500 paradoxy/minute)\n"
+                f"`{prefix}useitem <item>` - Activate/deactivate items (max 2 active)\n"
+                f"`{prefix}reseteco [@user]` - [Owner] Reset user economy\n\n"
                 f"**Shop:**\n"
                 f"`{prefix}shop` - Browse items\n"
                 f"`{prefix}buy <item>` - Purchase an item\n"
@@ -3122,54 +3125,120 @@ class CrimeDifficultyView(discord.ui.View):
         await self.start_heist(interaction, "hard")
 
     async def start_heist(self, interaction: discord.Interaction, difficulty: str):
-        game_type = random.choice(["math", "guess", "unscramble"])
-        if game_type == "math":
-            num1 = random.randint(10, 50) if difficulty == "easy" else random.randint(50, 200)
-            num2 = random.randint(10, 50) if difficulty == "easy" else random.randint(50, 200)
-            op = random.choice(["+", "-"])
-            answer = num1 + num2 if op == "+" else num1 - num2
-            prompt = f"What is **{num1} {op} {num2}**?"
-        elif game_type == "guess":
-            range_max = 10 if difficulty == "easy" else 50
-            answer = random.randint(1, range_max)
-            prompt = f"Guess the secret number between **1 and {range_max}**!"
+        """Start heist with interactive minigames."""
+        minigame = random.choice(["lockpick", "circuit", "safe"])
+        
+        if minigame == "lockpick":
+            await self.lockpick_minigame(interaction, difficulty)
+        elif minigame == "circuit":
+            await self.circuit_minigame(interaction, difficulty)
         else:
-            words = ["paradox", "economy", "casino", "gambling", "security", "heist", "criminal"]
-            word = random.choice(words)
-            answer = word
-            scrambled = "".join(random.sample(word, len(word)))
-            prompt = f"Unscramble this word: **{scrambled}**"
-
-        embed = discord.Embed(title=f"🔐 {difficulty.upper()} HEIST: {game_type.upper()}", color=0xF1C40F)
-        embed.description = f"{prompt}\n\n*You have 15 seconds to type the answer!*"
-        await interaction.response.edit_message(embed=embed, view=None)
-
-        def check(m):
-            return m.author.id == self.user_id and m.channel.id == self.ctx.channel.id
-
-        try:
-            msg = await bot.wait_for("message", check=check, timeout=15.0)
-            if msg.content.lower() == str(answer).lower():
-                base = {"easy": 20000, "normal": 60000, "hard": 150000}[difficulty]
-                amount = random.randint(int(base*0.8), int(base*1.2))
-                await db.update_balance(str(self.user_id), amount)
-                await db.update_quest_progress(str(self.user_id), "crime")
-                
-                embed = discord.Embed(title="💰 HEIST SUCCESS!", color=0x2ECC71)
-                embed.description = f"You successfully cracked the safe and got away with **{amount:,}** {CURRENCY_NAME}!"
-                await self.ctx.send(embed=embed)
+            await self.safe_minigame(interaction, difficulty)
+    
+    async def lockpick_minigame(self, interaction: discord.Interaction, difficulty: str):
+        """Lockpick minigame - click correct zones."""
+        embed = discord.Embed(title="🔓 Lockpicking Challenge", color=0xF1C40F)
+        embed.description = "Click the green zones (●) to pick the lock. You have 3 attempts."
+        embed.set_image(url="https://via.placeholder.com/400x100.png?text=G+●+R+●+G+●")
+        
+        correct = random.randint(1, 3)
+        attempts = [0]
+        success = [False]
+        
+        async def check_zone(btn_num):
+            attempts[0] += 1
+            if btn_num == correct:
+                success[0] = True
+                await self.finish_heist(interaction, difficulty, True)
+            elif attempts[0] >= 3:
+                await self.finish_heist(interaction, difficulty, False)
             else:
-                raise asyncio.TimeoutError
-        except asyncio.TimeoutError:
+                await interaction.response.send_message(f"❌ Wrong zone! {3 - attempts[0]} attempts left.", ephemeral=True)
+        
+        view = discord.ui.View()
+        for i in range(1, 4):
+            btn = discord.ui.Button(label=f"Zone {i}", style=discord.ButtonStyle.secondary)
+            btn.callback = lambda inter, num=i: check_zone(num)
+            view.add_item(btn)
+        
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    async def circuit_minigame(self, interaction: discord.Interaction, difficulty: str):
+        """Circuit board minigame - match colors."""
+        embed = discord.Embed(title="⚡ Circuit Board", color=0x3498DB)
+        embed.description = "Connect the wires: Match the colors to complete the circuit."
+        target_color = random.choice(["Red", "Blue", "Green", "Yellow"])
+        embed.set_field_at(0, name="Target", value=f":{target_color.lower()}_circle: {target_color}")
+        
+        view = discord.ui.View()
+        colors = ["🔴 Red", "🔵 Blue", "🟢 Green", "🟡 Yellow"]
+        
+        for i, color in enumerate(colors):
+            btn = discord.ui.Button(label=color, style=discord.ButtonStyle.secondary if color.split()[1] != target_color else discord.ButtonStyle.success)
+            async def handle_color(inter, correct=(color.split()[1] == target_color)):
+                if correct:
+                    await self.finish_heist(inter, difficulty, True)
+                else:
+                    await inter.response.send_message("❌ Wrong color! Alarm triggered!", ephemeral=True)
+                    await self.finish_heist(inter, difficulty, False)
+            btn.callback = handle_color
+            view.add_item(btn)
+        
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    async def safe_minigame(self, interaction: discord.Interaction, difficulty: str):
+        """Safe cracking minigame - spin the dial."""
+        embed = discord.Embed(title="🔐 Safe Cracking", color=0xE74C3C)
+        embed.description = "Spin the dial to the correct number. Random range per difficulty."
+        if difficulty == "easy":
+            correct = random.randint(1, 5)
+            range_text = "1-5"
+        elif difficulty == "normal":
+            correct = random.randint(1, 10)
+            range_text = "1-10"
+        else:
+            correct = random.randint(1, 15)
+            range_text = "1-15"
+        embed.add_field(name="Range", value=range_text, inline=False)
+        
+        view = discord.ui.View()
+        input_field = discord.ui.TextInput(label="Enter your number:", placeholder="Enter a number", max_length=2)
+        modal = discord.ui.Modal(title="Dial the Combination", children=[input_field])
+        
+        async def modal_callback(modal_inter: discord.Interaction):
+            try:
+                guess = int(input_field.value)
+                if guess == correct:
+                    await self.finish_heist(modal_inter, difficulty, True)
+                else:
+                    await modal_inter.response.send_message(f"❌ Wrong number! Alarm triggered!", ephemeral=True)
+                    await self.finish_heist(modal_inter, difficulty, False)
+            except ValueError:
+                await modal_inter.response.send_message("❌ Invalid number!", ephemeral=True)
+        
+        modal.on_submit = modal_callback
+        await interaction.response.send_modal(modal)
+    
+    async def finish_heist(self, interaction: discord.Interaction, difficulty: str, success: bool):
+        """Complete heist and reward/fine player."""
+        base = {"easy": 20000, "normal": 60000, "hard": 150000}[difficulty]
+        if success:
+            amount = random.randint(int(base * 0.8), int(base * 1.2))
+            await db.update_balance(str(self.user_id), amount)
+            embed = discord.Embed(title="💰 Heist Successful!", description=f"You got away with **{amount:,}** {CURRENCY_NAME}!", color=0x2ECC71)
+        else:
             fine_base = {"easy": 5000, "normal": 15000, "hard": 40000}[difficulty]
-            loss = random.randint(int(fine_base*0.8), int(fine_base*1.2))
-            await db.update_balance(str(self.user_id), -loss)
+            loss = random.randint(int(fine_base * 0.8), int(fine_base * 1.2))
             jail_time = {"easy": 10, "normal": 30, "hard": 60}[difficulty]
+            await db.update_balance(str(self.user_id), -loss)
             await db.set_cooldown(str(self.user_id), "jail", datetime.now() + timedelta(minutes=jail_time))
-            
-            embed = discord.Embed(title="🚨 BUSTED & JAILED!", color=0xE74C3C)
-            embed.description = f"You failed the heist! You were fined **{loss:,}** {CURRENCY_NAME} and sent to **Jail** for **{jail_time} minutes**!"
-            await self.ctx.send(embed=embed)
+            embed = discord.Embed(title="🚨 Heist Failed!", description=f"Caught! Fined **{loss:,}** {CURRENCY_NAME} and jailed **{jail_time}m**.", color=0xE74C3C)
+        
+        if not interaction.response.is_done():
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.followup.send(embed=embed)
+
 
 class TeamHeistView(discord.ui.View):
     def __init__(self, leader):
@@ -3250,6 +3319,27 @@ async def teamheist_cmd(ctx: commands.Context):
             await db.set_cooldown(str(m_id), "jail", datetime.now() + timedelta(minutes=45))
         await ctx.send("🚨 **TEAM BUSTED!** Everyone sent to **Jail** for 45m.")
 
+@bot.command(name="bail")
+async def bail_cmd(ctx: commands.Context):
+    """Pay bail to get out of jail early. Cost: 500 paradoxy per minute remaining."""
+    user_id = str(ctx.author.id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    
+    if not jail_end or datetime.now() >= jail_end:
+        return await ctx.send("❌ You are not in jail.")
+    
+    rem = jail_end - datetime.now()
+    remaining_minutes = max(1, int(rem.total_seconds() / 60))
+    bail_cost = remaining_minutes * 500
+    
+    wallet = await db.get_balance(user_id)
+    if wallet < bail_cost:
+        return await ctx.send(f"❌ Bail costs **{bail_cost:,}** {CURRENCY_NAME}. You only have **{wallet:,}**.")
+    
+    await db.update_balance(user_id, -bail_cost)
+    await db.set_cooldown(user_id, "jail", datetime.now())  # Release immediately
+    await ctx.send(f"✅ You paid **{bail_cost:,}** {CURRENCY_NAME} bail and were released from jail!")
+
 @bot.command(name="crime")
 @commands.cooldown(1, 60, commands.BucketType.user)
 async def crime_cmd(ctx: commands.Context):
@@ -3326,13 +3416,50 @@ async def steal_cmd(ctx: commands.Context, target: discord.Member):
 
     if success:
         stolen = random.randint(int(t_bal * 0.1), int(t_bal * 0.4))
-        await db.update_balance(t_id, -stolen)
+        # Ensure we deduct from target and add to attacker
+        await db.db.users.update_one({"_id": t_id}, {"$inc": {"balance": -stolen}}, upsert=True)
         await db.update_balance(a_id, stolen)
         await ctx.send(f"💸 You successfully robbed **{target.display_name}** and took **{stolen:,}** {CURRENCY_NAME}!")
     else:
         fine = random.randint(1000, 5000)
         await db.update_balance(a_id, -fine)
         await ctx.send(f"🚔 You were caught robbing **{target.display_name}** and paid a **{fine:,}** fine to the police!")
+
+@bot.command(name="reseteco")
+@commands.is_owner()
+async def reset_eco_cmd(ctx: commands.Context, member: discord.Member):
+    """[Owner] Reset a user's economy and remove all items."""
+    user_id = str(member.id)
+    await db.update_balance(user_id, -await db.get_balance(user_id))
+    await db.update_bank(user_id, -await db.get_bank(user_id))
+    await db.clear_loan(user_id)
+    inventory = await db.get_inventory(user_id)
+    for item in inventory:
+        await db.remove_item(user_id, item)
+    await ctx.send(f"✅ Reset economy for {member.display_name}.")
+
+@bot.command(name="useitem")
+async def use_item_cmd(ctx: commands.Context, *, item_name: str):
+    """Use an item from your inventory. Max 2 items active at once."""
+    user_id = str(ctx.author.id)
+    inventory = await db.get_inventory(user_id)
+    
+    search = next((name for name in inventory if name.lower() == item_name.strip().lower()), None)
+    if not search:
+        return await ctx.send("❌ You don't own that item.")
+    
+    active_items = await db.get_user_field(user_id, "active_items", [])
+    if len(active_items) >= 2:
+        return await ctx.send(f"❌ You can only have 2 items active at once. Currently using: {', '.join(active_items)}")
+    
+    if search in active_items:
+        active_items.remove(search)
+        await db.set_user_field(user_id, "active_items", active_items)
+        await ctx.send(f"✅ Deactivated **{search}**.")
+    else:
+        active_items.append(search)
+        await db.set_user_field(user_id, "active_items", active_items)
+        await ctx.send(f"✅ Activated **{search}**. Active items: {', '.join(active_items)}")
 
 # ── SOCIAL ACTIONS ─────────────────────────────
 
