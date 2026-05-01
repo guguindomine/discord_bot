@@ -73,6 +73,15 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 # ── ECONOMY SETTINGS ──
 CURRENCY_NAME = "paradoxy"
 
+SHOP_ITEMS = {
+    "Lucky Coin": {"price": 8000, "desc": "Boosts luck by 5% in casino and chance games."},
+    "Golden Clover": {"price": 20000, "desc": "Boosts luck by 15% in casino and chance games."},
+    "Thief Kit": {"price": 25000, "desc": "Increase steal success rate by 10%."},
+    "Crime Mask": {"price": 22000, "desc": "Reduces crime fines by 30%."},
+    "Shield": {"price": 18000, "desc": "30% chance to block being robbed."},
+    "VIP Pass": {"price": 45000, "desc": "Increase your daily reward by 50%."},
+}
+
 # Dynamic interest rate tier probabilities:
 #  90% → normal  (1.1% – 2.3%)
 #   5% → low     (0.7% – 1.1%)
@@ -392,7 +401,10 @@ class HelpSelect(discord.ui.Select):
                 f"**Shop:**\n"
                 f"`{prefix}shop` - Browse items\n"
                 f"`{prefix}buy <item>` - Purchase an item\n"
-                f"`{prefix}inventory [@user]` - View your items"
+                f"`{prefix}inventory [@user]` - View your items\n\n"
+                f"**Bank:**\n"
+                f"`{prefix}bankincrease` - Check bank growth and interest projection\n"
+                f"`{prefix}bank interest` - Same as bankincrease, shows potential hourly interest"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -2317,6 +2329,13 @@ async def on_command_error(ctx: commands.Context, error):
         await ctx.send(f"⚠️ Missing argument: `{error.param.name}`. Use `{PREFIX}help {ctx.command}` for usage.")
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("❌ Member not found. Make sure to mention them or use their exact name.")
+    elif isinstance(error, commands.CommandOnCooldown):
+        retry = int(error.retry_after)
+        minutes, seconds = divmod(retry, 60)
+        if minutes:
+            await ctx.send(f"⏳ Please wait **{minutes}m {seconds}s** before using `{ctx.command}` again.")
+        else:
+            await ctx.send(f"⏳ Please wait **{seconds}s** before using `{ctx.command}` again.")
     elif isinstance(error, commands.CommandNotFound):
         pass  # Silently ignore unknown commands
     else:
@@ -2358,6 +2377,112 @@ async def balance_cmd(ctx: commands.Context, member: discord.Member = None):
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"Paradox Bot 💜 | Bank earns variable interest (1.1-2.3% hourly)")
     await ctx.send(embed=embed)
+
+async def send_bank_interest(ctx: commands.Context):
+    user_id = str(ctx.author.id)
+    bank = await db.get_bank(user_id)
+    if bank <= 0:
+        return await ctx.send("💤 Your bank is empty. Deposit some paradoxals first to start earning interest.")
+
+    low_rate = 0.007
+    high_rate = 0.03
+    projected_low = int(bank * low_rate)
+    projected_high = int(bank * high_rate)
+
+    embed = discord.Embed(
+        title="📈 Bank Interest Forecast",
+        description=(
+            f"Your current bank balance is **{bank:,}** {CURRENCY_NAME}.\n\n"
+            f"Estimated hourly increase: **{projected_low:,}** - **{projected_high:,}** {CURRENCY_NAME}.\n"
+            "Actual interest varies from 0.7% to 3.0% each hour."
+        ),
+        color=0x2ECC71
+    )
+    embed.set_footer(text="Keep money in the bank to earn variable hourly interest.")
+    await ctx.send(embed=embed)
+
+@bot.command(name="bankincrease", aliases=["checkbankincrease", "bankgrowth", "bankinterest"])
+async def bank_increase_cmd(ctx: commands.Context):
+    """Check your bank balance and interest projection."""
+    await send_bank_interest(ctx)
+
+@bank_group.command(name="interest", aliases=["growth", "increase"])
+async def bank_interest(ctx: commands.Context):
+    """Show projected interest increases for your bank balance."""
+    await send_bank_interest(ctx)
+
+@bot.command(name="shop")
+async def shop_cmd(ctx: commands.Context):
+    """Browse shop items available for purchase."""
+    embed = discord.Embed(title="🛒 Paradox Shop", color=0x2ECC71)
+    embed.description = "Use `!buy <item name>` to purchase an item. Example: `!buy Lucky Coin`"
+    for name, data in SHOP_ITEMS.items():
+        embed.add_field(name=f"{name} — {data['price']:,} {CURRENCY_NAME}", value=data["desc"], inline=False)
+    embed.set_footer(text="Some items are unique and cannot be purchased more than once.")
+    await ctx.send(embed=embed)
+
+@bot.command(name="buy")
+async def buy_cmd(ctx: commands.Context, *, item_name: str):
+    """Purchase a shop item for your economy inventory."""
+    search = next((name for name in SHOP_ITEMS if name.lower() == item_name.strip().lower()), None)
+    if not search:
+        return await ctx.send("❌ Item not found. Use `!shop` to see available items.")
+
+    user_id = str(ctx.author.id)
+    inventory = await db.get_inventory(user_id)
+    if search in inventory:
+        return await ctx.send(f"❌ You already own **{search}**.")
+
+    price = SHOP_ITEMS[search]["price"]
+    wallet = await db.get_balance(user_id)
+    if wallet < price:
+        return await ctx.send(f"❌ You need **{price - wallet:,}** more {CURRENCY_NAME} to buy **{search}**.")
+
+    await db.update_balance(user_id, -price)
+    await db.add_item(user_id, search)
+    await ctx.send(f"✅ You purchased **{search}** for **{price:,}** {CURRENCY_NAME}!")
+
+@bot.command(name="inventory", aliases=["inv"])
+async def inventory_cmd(ctx: commands.Context, member: discord.Member = None):
+    """View your owned shop items and active effects."""
+    member = member or ctx.author
+    inventory = await db.get_inventory(str(member.id))
+    if not inventory:
+        return await ctx.send(f"{member.display_name} has no items in their inventory.")
+
+    item_counts = {}
+    for item in inventory:
+        item_counts[item] = item_counts.get(item, 0) + 1
+
+    embed = discord.Embed(title=f"🧾 {member.display_name}'s Inventory", color=0x9B59B6)
+    for item, count in item_counts.items():
+        value = f"Quantity: {count}" if count > 1 else "Owned"
+        embed.add_field(name=item, value=value, inline=False)
+    embed.set_footer(text="Use !shop to browse items and !buy <item> to purchase.")
+    await ctx.send(embed=embed)
+
+@bot.command(name="bj", aliases=["blackjack"])
+async def bj_cmd(ctx: commands.Context, amount: str):
+    """Start a round of blackjack with an interactive button interface."""
+    user_id = str(ctx.author.id)
+    balance = await db.get_balance(user_id)
+    if amount.lower() == "all":
+        bet = balance
+    else:
+        try:
+            bet = int(amount)
+        except ValueError:
+            return await ctx.send("❌ Please enter a valid bet amount or `all`.")
+
+    if bet <= 0:
+        return await ctx.send("❌ Bet must be greater than zero.")
+    if bet > balance:
+        return await ctx.send(f"❌ You do not have enough {CURRENCY_NAME}. Your wallet has {balance:,}.")
+
+    await db.update_balance(user_id, -bet)
+    view = BlackjackView(ctx, ctx.author.id, bet)
+    embed = view.create_embed()
+    await ctx.send(embed=embed, view=view)
 
 @bot.command(name="daily")
 async def daily_cmd(ctx: commands.Context):
@@ -2825,14 +2950,49 @@ class BlackjackView(discord.ui.View):
     async def finish_game(self, interaction: discord.Interaction):
         self.is_over = True
         self.stop()
-        
-        msg_text = "⏳ **Dealer is thinking...**"
+
         if not interaction.response.is_done():
-            await interaction.response.edit_message(content=msg_text, view=None)
+            await interaction.response.edit_message(content="⏳ **Dealer is thinking...**", view=None)
         else:
-            await interaction.edit_original_response(content=msg_text, view=None)
-            
+            await interaction.edit_original_response(content="⏳ **Dealer is thinking...**", view=None)
+
         await asyncio.sleep(1.5)
+
+        while self.get_score(self.dealer_hand) < 17:
+            self.dealer_hand.append(self.deck.pop())
+
+        dealer_score = self.get_score(self.dealer_hand)
+        results = []
+        net_change = 0
+
+        for index, hand in enumerate(self.hands, start=1):
+            bet = self.bets[index - 1]
+            player_score = self.get_score(hand)
+            hand_name = f"Hand {index}" if len(self.hands) > 1 else "Your Hand"
+
+            if player_score > 21:
+                results.append(f"**{hand_name}**: BUST with **{player_score}**. Lost **{bet:,}** {CURRENCY_NAME}.")
+                net_change -= bet
+            elif dealer_score > 21 or player_score > dealer_score:
+                await db.update_balance(str(self.user_id), bet * 2)
+                results.append(f"**{hand_name}**: WIN with **{player_score}** vs Dealer **{dealer_score}**. Gained **{bet:,}** {CURRENCY_NAME}.")
+                net_change += bet
+            elif player_score == dealer_score:
+                await db.update_balance(str(self.user_id), bet)
+                results.append(f"**{hand_name}**: PUSH with **{player_score}**. Bet returned.")
+            else:
+                results.append(f"**{hand_name}**: LOSE with **{player_score}** vs Dealer **{dealer_score}**. Lost **{bet:,}** {CURRENCY_NAME}.")
+                net_change -= bet
+
+        embed = discord.Embed(title="🃏 Blackjack Results", color=0x2ECC71 if net_change >= 0 else 0xE74C3C)
+        embed.add_field(name=f"Dealer ({dealer_score})", value=f"`{' '.join(self.dealer_hand)}`", inline=False)
+        embed.description = "\n".join(results)
+        embed.set_footer(text=f"Net change: {'+' if net_change >= 0 else '-'}{abs(net_change):,} {CURRENCY_NAME}")
+
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(content=None, embed=embed, view=None)
+        else:
+            await interaction.edit_original_response(content=None, embed=embed, view=None)
 
 # ── HEIST & JAIL SYSTEM ────────────────────────
 
