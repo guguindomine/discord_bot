@@ -326,7 +326,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}clearscamlog <@user>` - Reset scam strikes\n"
                 f"`{prefix}addswear <word>` - Add word to filter\n"
                 f"`{prefix}removeswear <word>` - Remove word from filter\n"
-                f"`{prefix}migrate db` - Move JSON data to Database\n"
+                f"`{prefix}migrate <db/json>` - Move data between JSON & DB\n"
                 f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
                 f"`{prefix}logwhitelist <add/remove/list>` - Invisible from logs\n"
                 f"`{prefix}unquarantine <@user>` - Release user from prison"
@@ -764,7 +764,16 @@ async def on_message(message: discord.Message):
 
     # 2. SWEAR FILTER
     if swear_filter_on and swear_list and contains_swear(message.content, swear_list):
-        user_infs = await db.get_infractions(user_id)
+        # Safeguard: If DB is not connected, just delete the message and stop
+        if db.db is None:
+            try:
+                await message.delete()
+                await message.channel.send(f"⚠️ {message.author.mention}, watch your language! (Database Offline - Message Removed)", delete_after=5)
+            except: pass
+            return
+
+        try:
+            user_infs = await db.get_infractions(user_id)
         
         # Cooldown/Reset Check
         if user_infs:
@@ -829,6 +838,9 @@ async def on_message(message: discord.Message):
                 log_embed.add_field(name="Message (censored)", value=censored, inline=False)
                 log_embed.set_footer(text="Paradox Bot 💜")
                 await log_channel.send(embed=log_embed)
+
+        except Exception as e:
+            print(f"  [ERROR] Swear filter execution failed: {e}")
 
         print(f"  [FILTER] Deleted message from {message.author.name}")
         return  # Stop here if the message was filtered
@@ -2132,36 +2144,64 @@ async def remove_ticket_user(ctx: commands.Context, member: discord.Member):
 @bot.command(name="migrate")
 @commands.has_permissions(administrator=True)
 async def migrate_cmd(ctx: commands.Context, arg: str = None):
-    """Migrate data from config.json to MongoDB. Usage: !migrate db"""
-    if arg != "db":
-        await ctx.send("❓ Usage: `!migrate db`")
-        return
+    """Migrate data. Usage: !migrate db (JSON -> DB) or !migrate json (DB -> JSON)"""
+    if arg == "db":
+        cfg = load_config()
+        await ctx.send("🔄 Starting database migration (JSON -> MongoDB)...")
         
-    cfg = load_config()
-    await ctx.send("🔄 Starting database migration...")
-    
-    # Migrate Vouches
-    vouches = cfg.get("VOUCHES", {})
-    for uid, count in vouches.items():
-        await db.set_vouches(uid, count)
-        
-    # Migrate Scam Strikes
-    scams = cfg.get("SCAM_INFRACTIONS", {})
-    for uid, count in scams.items():
-        for _ in range(count):
-            await db.add_scam_strike(uid)
+        # Migrate Vouches
+        vouches = cfg.get("VOUCHES", {})
+        for uid, count in vouches.items():
+            await db.set_vouches(uid, count)
             
-    # Migrate Infractions
-    infractions = cfg.get("INFRACTIONS", {})
-    for uid, inf_list in infractions.items():
-        await db.set_infractions(uid, inf_list)
+        # Migrate Scam Strikes
+        scams = cfg.get("SCAM_INFRACTIONS", {})
+        for uid, count in scams.items():
+            # We use set_scam_strikes logic or just add them
+            await db.db.users.update_one({"_id": uid}, {"$set": {"scam_strikes": count}}, upsert=True)
+            
+        # Migrate Infractions
+        infractions = cfg.get("INFRACTIONS", {})
+        for uid, inf_list in infractions.items():
+            await db.set_infractions(uid, inf_list)
+            
+        # Migrate Quarantine
+        quarantine = cfg.get("QUARANTINE_ROLES", {})
+        for uid, roles in quarantine.items():
+            await db.save_quarantine_roles(uid, roles)
+            
+        await ctx.send("✅ Migration complete! All user data has been transferred to MongoDB.")
         
-    # Migrate Quarantine
-    quarantine = cfg.get("QUARANTINE_ROLES", {})
-    for uid, roles in quarantine.items():
-        await db.save_quarantine_roles(uid, roles)
+    elif arg == "json":
+        if db.db is None:
+            await ctx.send("❌ Database not connected. Cannot export data.")
+            return
+
+        await ctx.send("🔄 Starting export (MongoDB -> JSON)...")
+        all_users = await db.get_all_users()
+        cfg = load_config()
         
-    await ctx.send("✅ Migration complete! All user data has been transferred to MongoDB.")
+        # Initialize sections
+        cfg["VOUCHES"] = {}
+        cfg["SCAM_INFRACTIONS"] = {}
+        cfg["INFRACTIONS"] = {}
+        cfg["QUARANTINE_ROLES"] = {}
+        
+        for user in all_users:
+            uid = user["_id"]
+            if "vouches" in user:
+                cfg["VOUCHES"][uid] = user["vouches"]
+            if "scam_strikes" in user:
+                cfg["SCAM_INFRACTIONS"][uid] = user["scam_strikes"]
+            if "infractions" in user:
+                cfg["INFRACTIONS"][uid] = user["infractions"]
+            if "quarantine_roles" in user:
+                cfg["QUARANTINE_ROLES"][uid] = user["quarantine_roles"]
+                
+        save_config(cfg)
+        await ctx.send(f"✅ Export complete! Data for {len(all_users)} users has been saved to config.json.")
+    else:
+        await ctx.send("❓ Usage: `!migrate db` (Import to DB) or `!migrate json` (Export to JSON)")
 
 # ══════════════════════════════════════════════
 #  ERROR HANDLING

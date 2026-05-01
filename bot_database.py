@@ -107,5 +107,14 @@ class BotDatabase:
             {"$unset": {"quarantine_roles": ""}}
         )
 
+    async def get_all_users(self) -> list:
+        """Returns all user documents from the database."""
+        if not self.db: return []
+        cursor = self.db.users.find({})
+        users = []
+        async for doc in cursor:
+            users.append(doc)
+        return users
+
 # Global database instance
 db = BotDatabase()
