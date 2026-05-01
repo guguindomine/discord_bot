@@ -2520,6 +2520,42 @@ async def pay_loan_cmd(ctx: commands.Context):
         needed = -bank
         await ctx.send(f"❌ You need to deposit **{needed:,}** more {CURRENCY_NAME} to pay off your loan.")
 
+@bank_group.command(name="deposit", aliases=["dep"])
+async def bank_deposit(ctx: commands.Context, amount: str):
+    user_id = str(ctx.author.id)
+    wallet = await db.get_balance(user_id)
+    
+    if amount.lower() == "all":
+        amount = wallet
+    else:
+        try: amount = int(amount)
+        except: return await ctx.send("❌ Please provide a valid number.")
+
+    if amount <= 0 or amount > wallet:
+        return await ctx.send("❌ Invalid amount.")
+
+    await db.update_balance(user_id, -amount)
+    await db.update_bank(user_id, amount)
+    await ctx.send(f"🏦 Deposited **{amount:,}** {CURRENCY_NAME} into your bank!")
+
+@bank_group.command(name="withdraw", aliases=["with"])
+async def bank_withdraw(ctx: commands.Context, amount: str):
+    user_id = str(ctx.author.id)
+    bank = await db.get_bank(user_id)
+    
+    if amount.lower() == "all":
+        amount = bank
+    else:
+        try: amount = int(amount)
+        except: return await ctx.send("❌ Please provide a valid number.")
+
+    if amount <= 0 or amount > bank:
+        return await ctx.send("❌ Invalid amount.")
+
+    await db.update_bank(user_id, -amount)
+    await db.update_balance(user_id, amount)
+    await ctx.send(f"🏦 Withdrew **{amount:,}** {CURRENCY_NAME} from your bank!")
+
 @bot.command(name="shop")
 async def shop_cmd(ctx: commands.Context):
     """Browse shop items available for purchase."""
