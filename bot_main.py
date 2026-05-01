@@ -775,69 +775,69 @@ async def on_message(message: discord.Message):
         try:
             user_infs = await db.get_infractions(user_id)
         
-        # Cooldown/Reset Check
-        if user_infs:
-            last_inf = user_infs[-1]
-            last_time = datetime.strptime(last_inf["time"], "%Y-%m-%d %H:%M:%S")
-            time_diff = datetime.now() - last_time
-            count_before = len(user_infs)
-            
-            reset_needed = False
-            if count_before <= 3 and time_diff > timedelta(minutes=30): reset_needed = True
-            elif count_before == 4 and time_diff > timedelta(hours=1): reset_needed = True
-            elif count_before >= 5 and time_diff > timedelta(days=1): reset_needed = True
-            
-            if reset_needed:
-                await db.clear_infractions(user_id)
-                user_infs = []
+            # Cooldown/Reset Check
+            if user_infs:
+                last_inf = user_infs[-1]
+                last_time = datetime.strptime(last_inf["time"], "%Y-%m-%d %H:%M:%S")
+                time_diff = datetime.now() - last_time
+                count_before = len(user_infs)
+                
+                reset_needed = False
+                if count_before <= 3 and time_diff > timedelta(minutes=30): reset_needed = True
+                elif count_before == 4 and time_diff > timedelta(hours=1): reset_needed = True
+                elif count_before >= 5 and time_diff > timedelta(days=1): reset_needed = True
+                
+                if reset_needed:
+                    await db.clear_infractions(user_id)
+                    user_infs = []
 
-        # Log new infraction
-        word_found = find_swear_word(message.content, swear_list)
-        count = await db.add_infraction(user_id, word_found, message.channel.name)
-        swear_cfg = cfg.get("SWEAR_THRESHOLDS", {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8})
-        
-        # 1. Action: Silent delete
-        if count <= swear_cfg.get("silent", 1):
+            # Log new infraction
+            word_found = find_swear_word(message.content, swear_list)
+            count = await db.add_infraction(user_id, word_found, message.channel.name)
+            swear_cfg = cfg.get("SWEAR_THRESHOLDS", {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8})
+            
+            # 1. Action: Silent delete
+            if count <= swear_cfg.get("silent", 1):
+                try: await message.delete()
+                except: pass
+                print(f"  [FILTER] Silent strike {count} for {message.author.name}")
+                return
+
+            # Subsequent strikes
             try: await message.delete()
             except: pass
-            print(f"  [FILTER] Silent strike {count} for {message.author.name}")
-            return
+            
+            punishment_msg = ""
+            try:
+                if count == swear_cfg.get("warn1"):
+                    punishment_msg = "⚠️ Este é seu **1º aviso**. Mantenha o respeito!"
+                elif count == swear_cfg.get("warn2"):
+                    punishment_msg = "⚠️ Este é seu **2º aviso**. O próximo resultará em castigo!"
+                elif count == swear_cfg.get("mute"):
+                    await message.author.timeout(timedelta(minutes=1), reason="Swear Strike")
+                    punishment_msg = "🔇 Você foi castigado por **1 minuto**."
+                elif count >= swear_cfg.get("quarantine"):
+                    await apply_quarantine(message.author, "Swear Strikes")
+                    punishment_msg = "⚖️ Você foi enviado para a **Quarentena** por excesso de avisos."
+            except: pass
 
-        # Subsequent strikes
-        try: await message.delete()
-        except: pass
-        
-        punishment_msg = ""
-        try:
-            if count == swear_cfg.get("warn1"):
-                punishment_msg = "⚠️ Este é seu **1º aviso**. Mantenha o respeito!"
-            elif count == swear_cfg.get("warn2"):
-                punishment_msg = "⚠️ Este é seu **2º aviso**. O próximo resultará em castigo!"
-            elif count == swear_cfg.get("mute"):
-                await message.author.timeout(timedelta(minutes=1), reason="Swear Strike")
-                punishment_msg = "🔇 Você foi castigado por **1 minuto**."
-            elif count >= swear_cfg.get("quarantine"):
-                await apply_quarantine(message.author, "Swear Strikes")
-                punishment_msg = "⚖️ Você foi enviado para a **Quarentena** por excesso de avisos."
-        except: pass
+            warn_msg = f"⚠️ {message.author.mention}, watch your language!"
+            if punishment_msg:
+                warn_msg += f"\n{punishment_msg}"
+            
+            await message.channel.send(warn_msg, delete_after=10)
 
-        warn_msg = f"⚠️ {message.author.mention}, watch your language!"
-        if punishment_msg:
-            warn_msg += f"\n{punishment_msg}"
-        
-        await message.channel.send(warn_msg, delete_after=10)
-
-        log_channel_id = cfg.get("LOG_CHANNEL_ID")
-        if log_channel_id:
-            log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
-            if log_channel:
-                censored = censor_message(message.content, swear_list)
-                log_embed = discord.Embed(title="🚨 Swear Filter Triggered", color=0xE74C3C, timestamp=discord.utils.utcnow())
-                log_embed.add_field(name="User", value=message.author.mention, inline=True)
-                log_embed.add_field(name="Channel", value=message.channel.mention, inline=True)
-                log_embed.add_field(name="Message (censored)", value=censored, inline=False)
-                log_embed.set_footer(text="Paradox Bot 💜")
-                await log_channel.send(embed=log_embed)
+            log_channel_id = cfg.get("LOG_CHANNEL_ID")
+            if log_channel_id:
+                log_channel = bot.get_channel(int(log_channel_id)) or await bot.fetch_channel(int(log_channel_id))
+                if log_channel:
+                    censored = censor_message(message.content, swear_list)
+                    log_embed = discord.Embed(title="🚨 Swear Filter Triggered", color=0xE74C3C, timestamp=discord.utils.utcnow())
+                    log_embed.add_field(name="User", value=message.author.mention, inline=True)
+                    log_embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+                    log_embed.add_field(name="Message (censored)", value=censored, inline=False)
+                    log_embed.set_footer(text="Paradox Bot 💜")
+                    await log_channel.send(embed=log_embed)
 
         except Exception as e:
             print(f"  [ERROR] Swear filter execution failed: {e}")
