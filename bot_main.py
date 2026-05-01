@@ -83,21 +83,17 @@ SHOP_ITEMS = {
 }
 
 # Dynamic interest rate tier probabilities:
-#  90% → normal  (1.1% – 2.3%)
-#   5% → low     (0.7% – 1.1%)
-#   5% → high    (2.3% – 3.0%)
+#  80% → normal  (0.1% – 1.3%)
+#  20% → negative (-1% – 0%)
 @tasks.loop(hours=1)
 async def apply_interest_task():
     """Apply dynamic variable interest to all bank balances every hour."""
     roll = random.random()
-    if roll < 0.05:
-        rate = random.uniform(0.7, 1.1)
-        tier = "📉 Low"
-    elif roll < 0.10:
-        rate = random.uniform(2.3, 3.0)
-        tier = "📈 High"
+    if roll < 0.2:
+        rate = random.uniform(-1.0, 0.0)
+        tier = "📉 Negative"
     else:
-        rate = random.uniform(1.1, 2.3)
+        rate = random.uniform(0.1, 1.3)
         tier = "📊 Normal"
     multiplier = 1 + rate / 100
     await db.apply_bank_interest(multiplier)
@@ -404,7 +400,9 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}inventory [@user]` - View your items\n\n"
                 f"**Bank:**\n"
                 f"`{prefix}bank info` - Show your bank amount and interest earnings\n"
-                f"`{prefix}bank deposit/withdraw <amount>` - Bank (1.1–2.3% hourly)"
+                f"`{prefix}bank deposit/withdraw <amount>` - Bank (0.1–1.3% hourly, 20% negative)\n"
+                f"`{prefix}loan <amount>` - Take a loan (max 300k, pay back in 24h)\n"
+                f"`{prefix}payloan` - Pay off your loan"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -578,6 +576,8 @@ async def on_ready():
     # Start economy background tasks
     if not apply_interest_task.is_running():
         apply_interest_task.start()
+    if not check_loans_task.is_running():
+        check_loans_task.start()
 
     print("═" * 50)
     print(f"  ✅  Paradox Bot is ONLINE!")
@@ -2384,17 +2384,17 @@ async def send_bank_interest(ctx: commands.Context):
     if bank <= 0:
         return await ctx.send("💤 Your bank is empty. Deposit some paradoxals first to start earning interest.")
 
-    low_rate = 0.007
-    high_rate = 0.03
-    projected_low = int(bank * low_rate)
-    projected_high = int(bank * high_rate)
+    low_rate = -1.0
+    high_rate = 1.3
+    projected_low = int(bank * low_rate / 100)
+    projected_high = int(bank * high_rate / 100)
 
     embed = discord.Embed(
         title="📈 Bank Interest Forecast",
         description=(
             f"Your current bank balance is **{bank:,}** {CURRENCY_NAME}.\n\n"
-            f"Estimated hourly increase: **{projected_low:,}** - **{projected_high:,}** {CURRENCY_NAME}.\n"
-            "Actual interest varies from 0.7% to 3.0% each hour."
+            f"Estimated hourly change: **{projected_low:,}** - **{projected_high:,}** {CURRENCY_NAME}.\n"
+            "Interest varies from -1% to 1.3% each hour (20% chance negative)."
         ),
         color=0x2ECC71
     )
@@ -2406,10 +2406,119 @@ async def bank_group(ctx: commands.Context):
     """Manage your bank. Usage: !bank deposit <amount> or !bank withdraw <amount>"""
     await ctx.send("❓ Usage: `!bank deposit <amount>` or `!bank withdraw <amount>`")
 
-@bank_group.command(name="info", aliases=["interest", "growth", "increase"])
+@bank_group.command(name="info", aliases=["growth", "increase"])
 async def bank_info(ctx: commands.Context):
     """Show your bank amount and how much interest it may earn."""
     await send_bank_interest(ctx)
+
+async def handle_overdue_loan(ctx_or_user, user_id, loan_data):
+    """Handle overdue loan with fines and jail."""
+    warnings = loan_data.get("warnings", 0)
+    amount = loan_data["amount"]
+    if warnings == 0:
+        fine = int(amount * 0.05)
+        jail_time = 2
+        warnings = 1
+    elif warnings == 1:
+        fine = int(amount * 0.12)
+        jail_time = 4
+        warnings = 2
+    else:
+        # Sell inventory
+        inventory = await db.get_inventory(user_id)
+        if inventory:
+            item = inventory[0]  # Sell first item
+            price = int(SHOP_ITEMS.get(item, {"price": 0})["price"] * 0.8)  # 20% cheaper
+            await db.update_balance(user_id, price)
+            await db.remove_item(user_id, item)
+            await ctx_or_user.send(f"⚠️ Your loan is overdue. Sold **{item}** for **{price:,}** {CURRENCY_NAME}.")
+            return
+        else:
+            fine = int(amount * 0.2)  # Increase fine
+            await db.update_balance(user_id, -fine)
+            await ctx_or_user.send(f"⚠️ Your loan is overdue. Fined **{fine:,}** {CURRENCY_NAME}.")
+
+    await db.update_balance(user_id, -fine)
+    await db.set_cooldown(user_id, "jail", datetime.now() + timedelta(hours=jail_time))
+    loan_data["fines"] = loan_data.get("fines", 0) + fine
+    loan_data["warnings"] = warnings
+    await db.set_loan(user_id, loan_data)
+
+    if hasattr(ctx_or_user, 'send'):
+        await ctx_or_user.send(f"🚨 Loan overdue! Fined **{fine:,}** {CURRENCY_NAME} and jailed for **{jail_time}** hours.")
+    else:
+        # If called from task, send DM
+        user = bot.get_user(int(user_id))
+        if user:
+            try:
+                await user.send(f"🚨 Loan overdue! Fined **{fine:,}** {CURRENCY_NAME} and jailed for **{jail_time}** hours.")
+            except:
+                pass
+
+@tasks.loop(minutes=10)
+async def check_loans_task():
+    """Check for overdue loans every 10 minutes."""
+    now = datetime.now()
+    cursor = db.db.users.find({"loan": {"$exists": True}})
+    async for user in cursor:
+        loan_data = user.get("loan", {})
+        due_date = loan_data.get("due_date")
+        if due_date and now > due_date:
+            user_id = user["_id"]
+            await handle_overdue_loan(None, user_id, loan_data)
+
+@bot.command(name="loan")
+async def loan_cmd(ctx: commands.Context, amount: str):
+    """Take a loan from the bank. Max 300k. Pay back by depositing to cover negative bank."""
+    user_id = str(ctx.author.id)
+    loan_data = await db.get_loan(user_id)
+    if loan_data:
+        due_date = loan_data.get("due_date")
+        if due_date and datetime.now() < due_date:
+            return await ctx.send("❌ You already have an active loan. Pay it back first.")
+        else:
+            # Overdue, handle fines
+            await handle_overdue_loan(ctx, user_id, loan_data)
+            return
+
+    try:
+        amount = int(amount)
+    except ValueError:
+        return await ctx.send("❌ Please enter a valid loan amount.")
+
+    if amount <= 0 or amount > 300000:
+        return await ctx.send("❌ Loan amount must be between 1 and 300,000.")
+
+    # Add to wallet, subtract from bank (making it negative)
+    await db.update_balance(user_id, amount)
+    await db.update_bank(user_id, -amount)
+
+    due_date = datetime.now() + timedelta(hours=24)
+    loan_data = {
+        "amount": amount,
+        "due_date": due_date,
+        "fines": 0,
+        "warnings": 0
+    }
+    await db.set_loan(user_id, loan_data)
+
+    await ctx.send(f"✅ You took a loan of **{amount:,}** {CURRENCY_NAME}. Pay it back within 24 hours by depositing to your bank to cover the negative balance.")
+
+@bot.command(name="payloan")
+async def pay_loan_cmd(ctx: commands.Context):
+    """Pay off your loan by covering the negative bank balance."""
+    user_id = str(ctx.author.id)
+    loan_data = await db.get_loan(user_id)
+    if not loan_data:
+        return await ctx.send("❌ You have no active loan.")
+
+    bank = await db.get_bank(user_id)
+    if bank >= 0:
+        await db.clear_loan(user_id)
+        await ctx.send("✅ Your loan is paid off!")
+    else:
+        needed = -bank
+        await ctx.send(f"❌ You need to deposit **{needed:,}** more {CURRENCY_NAME} to pay off your loan.")
 
 @bot.command(name="shop")
 async def shop_cmd(ctx: commands.Context):

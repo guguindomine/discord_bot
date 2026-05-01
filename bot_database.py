@@ -175,5 +175,16 @@ class BotDatabase:
             users.append(doc)
         return users
 
+    # ── LOANS ────────────────────────────────
+    async def get_loan(self, user_id: str) -> dict:
+        user = await self.db.users.find_one({"_id": user_id})
+        return user.get("loan", {}) if user else {}
+
+    async def set_loan(self, user_id: str, loan_data: dict):
+        await self.db.users.update_one({"_id": user_id}, {"$set": {"loan": loan_data}}, upsert=True)
+
+    async def clear_loan(self, user_id: str):
+        await self.db.users.update_one({"_id": user_id}, {"$unset": {"loan": ""}})
+
 
 db = BotDatabase()
