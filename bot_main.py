@@ -2496,11 +2496,11 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
     if choice == "h": choice = "heads"
     if choice == "t": choice = "tails"
 
-    # Animation
+    # Animation (Faster)
     frames = ["🪙 **Flipping...**", "🔄 **Flipping...**", "📀 **Flipping...**", "🔄 **Flipping...**"]
     msg = await ctx.send(frames[0])
     for frame in frames[1:]:
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.3) # Faster spin
         await msg.edit(content=frame)
 
     result = random.choice(["heads", "tails"])
@@ -2677,51 +2677,90 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
 
 # ── BLACKJACK SYSTEM ──────────────────────────
 
+# ── BLACKJACK SYSTEM ──────────────────────────
+
 class BlackjackView(discord.ui.View):
     def __init__(self, ctx, user_id, bet):
         super().__init__(timeout=60)
         self.ctx = ctx
         self.user_id = user_id
-        self.bet = bet
-        self.deck = [2,3,4,5,6,7,8,9,10,10,10,10,11] * 4
-        random.shuffle(self.deck)
-        self.player_hand = [self.deck.pop(), self.deck.pop()]
+        self.initial_bet = bet
+        self.deck = self.create_deck()
+        
+        # Support for multiple hands (splitting)
+        self.hands = [[self.deck.pop(), self.deck.pop()]]
+        self.current_hand_index = 0
         self.dealer_hand = [self.deck.pop(), self.deck.pop()]
-        self.message = None
+        self.bets = [bet]
+        self.is_over = False
+
+    def create_deck(self):
+        suits = ["♠", "♥", "♦", "♣"]
+        ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+        deck = [f"{r}{s}" for s in suits for r in ranks]
+        random.shuffle(deck)
+        return deck
 
     def get_score(self, hand):
-        score = sum(hand)
-        if score > 21 and 11 in hand:
-            hand[hand.index(11)] = 1
-            score = sum(hand)
+        score = 0
+        aces = 0
+        for card in hand:
+            rank = card[:-1]
+            if rank in ["J", "Q", "K"]: score += 10
+            elif rank == "A": aces += 1; score += 11
+            else: score += int(rank)
+        while score > 21 and aces:
+            score -= 10
+            aces -= 1
         return score
 
+    def can_split(self):
+        if len(self.hands) >= 2: return False
+        hand = self.hands[self.current_hand_index]
+        if len(hand) != 2: return False
+        v1 = self.get_card_value(hand[0])
+        v2 = self.get_card_value(hand[1])
+        return v1 == v2
+
+    def get_card_value(self, card):
+        rank = card[:-1]
+        if rank in ["J", "Q", "K"]: return 10
+        if rank == "A": return 11
+        return int(rank)
+
     def create_embed(self, revealed=False):
-        p_score = self.get_score(self.player_hand)
-        d_score = self.get_score(self.dealer_hand)
+        embed = discord.Embed(title="🃏 Paradox Blackjack", color=0x34495E)
         
-        embed = discord.Embed(title="🃏 Paradox Blackjack", color=0x3498DB)
-        embed.add_field(name="Your Hand", value=f"Cards: {', '.join(map(str, self.player_hand))}\nScore: **{p_score}**", inline=True)
-        
-        if revealed:
-            embed.add_field(name="Dealer Hand", value=f"Cards: {', '.join(map(str, self.dealer_hand))}\nScore: **{d_score}**", inline=True)
-        else:
-            embed.add_field(name="Dealer Hand", value=f"Cards: {self.dealer_hand[0]}, ?\nScore: **?**", inline=True)
+        # Dealer Section
+        d_cards = " ".join(self.dealer_hand) if revealed else f"{self.dealer_hand[0]} ❓"
+        d_score = self.get_score(self.dealer_hand) if revealed else "?"
+        embed.add_field(name=f"Dealer: {d_score}", value=f"`{d_cards}`", inline=False)
+
+        # Player Hands Section
+        for i, hand in enumerate(self.hands):
+            prefix = "▶️ " if i == self.current_hand_index and not revealed else ""
+            status = f" (Hand {i+1})" if len(self.hands) > 1 else ""
+            score = self.get_score(hand)
+            embed.add_field(name=f"{prefix}You{status}: {score}", value=f"`{' '.join(hand)}`", inline=True)
+            
+        embed.set_footer(text=f"Total Bet: {sum(self.bets):,} {CURRENCY_NAME}")
         return embed
 
     @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
     async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id: return
-        self.player_hand.append(self.deck.pop())
-        score = self.get_score(self.player_hand)
         
-        # Disable Double Down after hitting
+        current_hand = self.hands[self.current_hand_index]
+        current_hand.append(self.deck.pop())
+        score = self.get_score(current_hand)
+
+        # Disable Split/Double after hitting
         for item in self.children:
-            if isinstance(item, discord.ui.Button) and item.label == "Double Down":
+            if isinstance(item, discord.ui.Button) and item.label in ["Split", "Double Down"]:
                 item.disabled = True
 
         if score > 21:
-            await self.end_game(interaction, "BUST")
+            await self.next_hand_or_finish(interaction)
         else:
             await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
@@ -2730,85 +2769,120 @@ class BlackjackView(discord.ui.View):
         if interaction.user.id != self.user_id: return
         
         balance = await db.get_balance(str(self.user_id))
-        if balance < self.bet * 2:
-            return await interaction.response.send_message("❌ You don't have enough paradoxy to double down!", ephemeral=True)
+        bet_to_add = self.bets[self.current_hand_index]
+        if balance < bet_to_add:
+            return await interaction.response.send_message("❌ Not enough paradoxy to double!", ephemeral=True)
         
-        self.bet *= 2
-        self.player_hand.append(self.deck.pop())
+        await db.update_balance(str(self.user_id), -bet_to_add)
+        self.bets[self.current_hand_index] *= 2
+        self.hands[self.current_hand_index].append(self.deck.pop())
         
-        # Auto-stand after 1 card
-        while self.get_score(self.dealer_hand) < 17:
-            self.dealer_hand.append(self.deck.pop())
-            
-        p_score = self.get_score(self.player_hand)
-        d_score = self.get_score(self.dealer_hand)
-        
-        if p_score > 21:
-            await self.end_game(interaction, "BUST")
-        elif d_score > 21 or p_score > d_score:
-            await self.end_game(interaction, "WIN")
-        elif p_score < d_score:
-            await self.end_game(interaction, "LOSE")
-        else:
-            await self.end_game(interaction, "PUSH")
+        await self.next_hand_or_finish(interaction)
 
-    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary, emoji="✂️")
+    async def split(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        if not self.can_split():
+            return await interaction.response.send_message("❌ You cannot split this hand!", ephemeral=True)
+            
+        balance = await db.get_balance(str(self.user_id))
+        if balance < self.initial_bet:
+            return await interaction.response.send_message("❌ Not enough paradoxy to split!", ephemeral=True)
+            
+        await db.update_balance(str(self.user_id), -self.initial_bet)
+        
+        # Split logic
+        old_hand = self.hands[self.current_hand_index]
+        card1, card2 = old_hand[0], old_hand[1]
+        
+        self.hands[self.current_hand_index] = [card1, self.deck.pop()]
+        self.hands.append([card2, self.deck.pop()])
+        self.bets.append(self.initial_bet)
+        
+        button.disabled = True
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.danger)
     async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id: return
+        await self.next_hand_or_finish(interaction)
+
+    async def next_hand_or_finish(self, interaction: discord.Interaction):
+        # Re-enable Double Down for next hand if it's a split
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.label == "Double Down":
+                item.disabled = False
+
+        self.current_hand_index += 1
+        if self.current_hand_index < len(self.hands):
+            if not interaction.response.is_done():
+                await interaction.response.edit_message(embed=self.create_embed(), view=self)
+            else:
+                await interaction.edit_original_response(embed=self.create_embed(), view=self)
+        else:
+            await self.finish_game(interaction)
+
+    async def finish_game(self, interaction: discord.Interaction):
+        self.is_over = True
+        self.stop()
         
-        await interaction.response.edit_message(content="⏳ **Dealer is thinking...**", view=None)
+        msg_text = "⏳ **Dealer is thinking...**"
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(content=msg_text, view=None)
+        else:
+            await interaction.edit_original_response(content=msg_text, view=None)
+            
         await asyncio.sleep(1.5)
 
-        # Dealer Logic
         while self.get_score(self.dealer_hand) < 17:
             self.dealer_hand.append(self.deck.pop())
             
-        p_score = self.get_score(self.player_hand)
         d_score = self.get_score(self.dealer_hand)
-        
-        if d_score > 21 or p_score > d_score:
-            await self.end_game(interaction, "WIN")
-        elif p_score < d_score:
-            await self.end_game(interaction, "LOSE")
-        else:
-            await self.end_game(interaction, "PUSH")
-
-    async def end_game(self, interaction, result):
-        self.stop()
-        for child in self.children: child.disabled = True
-        
-        # Apply luck items for blackjack (can prevent a lose 10% of the time)
         inventory = await db.get_inventory(str(self.user_id))
-        if result == "LOSE" or result == "BUST":
-            luck_chance = 0.05 if "Lucky Coin" in inventory else 0
-            if "Golden Clover" in inventory: luck_chance += 0.15
+        luck_chance = 0.05 if "Lucky Coin" in inventory else 0
+        if "Golden Clover" in inventory: luck_chance += 0.15
+
+        final_msg = ""
+        total_payout = 0
+        for i, hand in enumerate(self.hands):
+            p_score = self.get_score(hand)
+            bet = self.bets[i]
             
-            if random.random() < luck_chance:
-                result = "PUSH" # Lucky save!
-        
-        if result == "WIN":
-            await db.update_balance(str(self.user_id), self.bet)
-            # Quest progress
-            if self.bet > 0: await db.update_quest_progress(str(self.user_id), "gamble")
-            msg = f"🏆 **You Won!** You gained **{self.bet:,}** {CURRENCY_NAME}."
-            color = 0x2ECC71
-        elif result == "LOSE" or result == "BUST":
-            await db.update_balance(str(self.user_id), -self.bet)
-            # Quest progress
+            if p_score > 21: res = "BUST"
+            elif d_score > 21 or p_score > d_score: res = "WIN"
+            elif p_score < d_score: res = "LOSE"
+            else: res = "PUSH"
+
+            if (res == "LOSE" or res == "BUST") and random.random() < luck_chance:
+                res = "PUSH"
+
+            if res == "WIN":
+                total_payout += bet * 2
+                final_msg += f"✅ Hand {i+1}: **WIN** (+{bet:,})\n"
+            elif res == "LOSE" or res == "BUST":
+                final_msg += f"❌ Hand {i+1}: **{res}** (-{bet:,})\n"
+            else:
+                total_payout += bet
+                final_msg += f"🤝 Hand {i+1}: **PUSH** (Returned)\n"
+
+        await db.update_balance(str(self.user_id), total_payout)
+        if total_payout > sum(self.bets):
             await db.update_quest_progress(str(self.user_id), "gamble")
-            msg = f"💀 **You Lost!** You lost **{self.bet:,}** {CURRENCY_NAME}."
-            color = 0xE74C3C
-        else:
-            msg = "🤝 **Push!** Your paradoxy were returned."
-            color = 0xF1C40F
-            
+        
         embed = self.create_embed(revealed=True)
-        embed.color = color
-        embed.description = msg
-        if interaction.response.is_done():
-            await interaction.edit_original_response(content=None, embed=embed, view=self)
+        embed.description = final_msg
+        net = total_payout - sum(self.bets)
+        if net > 0:
+            embed.color = 0x2ECC71
+            embed.description += f"\n💰 **Net Profit: +{net:,} {CURRENCY_NAME}**"
+        elif net < 0:
+            embed.color = 0xE74C3C
+            embed.description += f"\n💀 **Net Loss: {net:,} {CURRENCY_NAME}**"
         else:
-            await interaction.response.edit_message(content=None, embed=embed, view=self)
+            embed.color = 0xF1C40F
+            embed.description += f"\n🤝 **Break Even!**"
+
+        await interaction.edit_original_response(content=None, embed=embed)
 
 # ── SHOP SYSTEM ──────────────────────────────
 
@@ -2873,11 +2947,108 @@ async def blackjack_cmd(ctx: commands.Context, bet: int):
     user_id = str(ctx.author.id)
     balance = await db.get_balance(user_id)
     if bet <= 0 or bet > balance:
-        return await ctx.send("❌ You don't have enough paradoxals!")
+        return await ctx.send(f"❌ You don't have enough {CURRENCY_NAME}!")
         
     view = BlackjackView(ctx, ctx.author.id, bet)
     embed = view.create_embed()
     msg = await ctx.send(embed=embed, view=view)
+
+# ── HEIST & JAIL SYSTEM ────────────────────────
+
+class CrimeDifficultyView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.user_id = ctx.author.id
+
+    @discord.ui.button(label="Easy", style=discord.ButtonStyle.success)
+    async def easy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        await self.start_heist(interaction, "easy")
+
+    @discord.ui.button(label="Normal", style=discord.ButtonStyle.primary)
+    async def normal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        await self.start_heist(interaction, "normal")
+
+    @discord.ui.button(label="Hard", style=discord.ButtonStyle.danger)
+    async def hard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        await self.start_heist(interaction, "hard")
+
+    async def start_heist(self, interaction: discord.Interaction, difficulty: str):
+        game_type = random.choice(["math", "guess", "unscramble"])
+        if game_type == "math":
+            num1 = random.randint(10, 50) if difficulty == "easy" else random.randint(50, 200)
+            num2 = random.randint(10, 50) if difficulty == "easy" else random.randint(50, 200)
+            op = random.choice(["+", "-"])
+            answer = num1 + num2 if op == "+" else num1 - num2
+            prompt = f"What is **{num1} {op} {num2}**?"
+        elif game_type == "guess":
+            range_max = 10 if difficulty == "easy" else 50
+            answer = random.randint(1, range_max)
+            prompt = f"Guess the secret number between **1 and {range_max}**!"
+        else:
+            words = ["paradox", "economy", "casino", "gambling", "security", "heist", "criminal"]
+            word = random.choice(words)
+            answer = word
+            scrambled = "".join(random.sample(word, len(word)))
+            prompt = f"Unscramble this word: **{scrambled}**"
+
+        embed = discord.Embed(title=f"🔐 {difficulty.upper()} HEIST: {game_type.upper()}", color=0xF1C40F)
+        embed.description = f"{prompt}\n\n*You have 15 seconds to type the answer!*"
+        await interaction.response.edit_message(embed=embed, view=None)
+
+        def check(m):
+            return m.author.id == self.user_id and m.channel.id == self.ctx.channel.id
+
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=15.0)
+            if msg.content.lower() == str(answer).lower():
+                base = {"easy": 20000, "normal": 60000, "hard": 150000}[difficulty]
+                amount = random.randint(int(base*0.8), int(base*1.2))
+                await db.update_balance(str(self.user_id), amount)
+                await db.update_quest_progress(str(self.user_id), "crime")
+                
+                embed = discord.Embed(title="💰 HEIST SUCCESS!", color=0x2ECC71)
+                embed.description = f"You successfully cracked the safe and got away with **{amount:,}** {CURRENCY_NAME}!"
+                await self.ctx.send(embed=embed)
+            else:
+                raise asyncio.TimeoutError
+        except asyncio.TimeoutError:
+            fine_base = {"easy": 5000, "normal": 15000, "hard": 40000}[difficulty]
+            loss = random.randint(int(fine_base*0.8), int(fine_base*1.2))
+            await db.update_balance(str(self.user_id), -loss)
+            jail_time = {"easy": 10, "normal": 30, "hard": 60}[difficulty]
+            await db.set_cooldown(str(self.user_id), "jail", datetime.now() + timedelta(minutes=jail_time))
+            
+            embed = discord.Embed(title="🚨 BUSTED & JAILED!", color=0xE74C3C)
+            embed.description = f"You failed the heist! You were fined **{loss:,}** {CURRENCY_NAME} and sent to **Jail** for **{jail_time} minutes**!"
+            await self.ctx.send(embed=embed)
+
+class TeamHeistView(discord.ui.View):
+    def __init__(self, leader):
+        super().__init__(timeout=45)
+        self.leader = leader
+        self.members = [leader.id]
+
+    @discord.ui.button(label="Join Heist", style=discord.ButtonStyle.primary, emoji="👥")
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id in self.members:
+            return await interaction.response.send_message("You are already in the team!", ephemeral=True)
+        if len(self.members) >= 5:
+            return await interaction.response.send_message("The team is full!", ephemeral=True)
+        self.members.append(interaction.user.id)
+        await interaction.response.send_message(f"✅ You joined the heist team! ({len(self.members)}/5)", ephemeral=True)
+        embed = interaction.message.embeds[0]
+        embed.description = f"**Current Team:**\n" + "\n".join([f"<@{m}>" for m in self.members]) + f"\n\n*Starting in 30s...*"
+        await interaction.message.edit(embed=embed)
+
+    @discord.ui.button(label="Start Now", style=discord.ButtonStyle.success)
+    async def start_early(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.leader.id:
+            return await interaction.response.send_message("Only the leader can start early!", ephemeral=True)
+        self.stop()
     view.message = msg
 
 
@@ -2946,6 +3117,12 @@ class CrimeDifficultyView(discord.ui.View):
 @commands.cooldown(1, 300, commands.BucketType.user)
 async def heist_cmd(ctx: commands.Context):
     """Start a strategic heist. Choose your difficulty!"""
+    user_id = str(ctx.author.id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    if jail_end and datetime.now() < jail_end:
+        rem = jail_end - datetime.now()
+        return await ctx.send(f"🔒 You are currently in **Jail**! You'll be released in **{int(rem.total_seconds()//60)}m {int(rem.total_seconds()%60)}s**.")
+
     # Animation
     msg = await ctx.send("🏦 **Preparing the heist equipment...**")
     await asyncio.sleep(2.0)
@@ -2955,11 +3132,51 @@ async def heist_cmd(ctx: commands.Context):
     view = CrimeDifficultyView(ctx)
     await msg.edit(content=None, embed=embed, view=view)
 
+@bot.command(name="teamheist", aliases=["th"])
+@commands.cooldown(1, 600, commands.BucketType.user)
+async def teamheist_cmd(ctx: commands.Context):
+    """Start a group heist with up to 5 people."""
+    user_id = str(ctx.author.id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    if jail_end and datetime.now() < jail_end:
+        rem = jail_end - datetime.now()
+        return await ctx.send(f"🔒 You are in **Jail**! You'll be released in **{int(rem.total_seconds()//60)}m**.")
+
+    embed = discord.Embed(title="🏦 MULTI-PLAYER TEAM HEIST", color=0x34495E)
+    embed.description = f"**Current Team:**\n{ctx.author.mention}\n\n*Starting in 30s...*"
+    view = TeamHeistView(ctx.author)
+    msg = await ctx.send(embed=embed, view=view)
+    await asyncio.sleep(30)
+    view.stop()
+    
+    if len(view.members) < 2:
+        return await ctx.send("❌ Not enough people joined. Cancelled.")
+
+    await ctx.send(f"🔥 **THE HEIST IS STARTING!** Team of {len(view.members)} moving in...")
+    await asyncio.sleep(2)
+    
+    success = random.random() < (0.3 + (len(view.members) * 0.1))
+    if success:
+        total_payout = random.randint(100000, 300000) * len(view.members)
+        share = total_payout // len(view.members)
+        for m_id in view.members:
+            await db.update_balance(str(m_id), share)
+            await db.update_quest_progress(str(m_id), "crime")
+        await ctx.send(f"💎 **TEAM WIN!** Total: **{total_payout:,}**. Each got: **{share:,}** {CURRENCY_NAME}!")
+    else:
+        for m_id in view.members:
+            await db.set_cooldown(str(m_id), "jail", datetime.now() + timedelta(minutes=45))
+        await ctx.send("🚨 **TEAM BUSTED!** Everyone sent to **Jail** for 45m.")
+
 @bot.command(name="crime")
 @commands.cooldown(1, 60, commands.BucketType.user)
 async def crime_cmd(ctx: commands.Context):
     """Commit a quick random crime for fast cash."""
     user_id = str(ctx.author.id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    if jail_end and datetime.now() < jail_end:
+        rem = jail_end - datetime.now()
+        return await ctx.send(f"🔒 You are in **Jail**! Release in **{int(rem.total_seconds()//60)}m**.")
     
     scenarios = [
         {"name": "Pickpocketing", "msg": "You snuck through the crowd and swiped a wallet!", "win_range": (1000, 3500), "fail_msg": "You were caught with your hand in someone's pocket!", "fine_range": (500, 1500), "chance": 0.7},
