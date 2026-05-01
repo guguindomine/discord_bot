@@ -173,3 +173,51 @@ def parse_role_name(guild, role_name: str):
         if role.name.lower() == role_name.lower():
             return role
     return None
+
+
+def parse_duration(duration_str: str) -> int:
+    """Convert 1h, 2d, 30m etc to seconds. If just numbers, treated as seconds."""
+    if duration_str.isdigit():
+        return int(duration_str)
+    
+    match = re.match(r"(\d+)([smhdw])", duration_str.lower())
+    if not match:
+        return 60  # Default to 60s
+    
+    amount, unit = match.groups()
+    amount = int(amount)
+    
+    units = {
+        's': 1,
+        'm': 60,
+        'h': 3600,
+        'd': 86400,
+        'w': 604800
+    }
+    
+    return amount * units.get(unit, 1)
+
+
+def format_duration(seconds: int) -> str:
+    """Convert seconds to human readable string (e.g. 1h 30m)."""
+    if seconds < 60:
+        return f"{seconds}s"
+    
+    intervals = (
+        ('weeks', 604800),
+        ('days', 86400),
+        ('hours', 3600),
+        ('minutes', 60),
+        ('seconds', 1),
+    )
+    
+    result = []
+    for name, count in intervals:
+        value = seconds // count
+        if value:
+            seconds -= value * count
+            if value == 1:
+                name = name.rstrip('s')
+            result.append(f"{value} {name}")
+            
+    return ", ".join(result[:2]) or "0s"
