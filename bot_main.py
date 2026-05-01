@@ -2496,14 +2496,21 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
     if choice == "h": choice = "heads"
     if choice == "t": choice = "tails"
 
+    # Animation
+    frames = ["🪙 **Flipping...**", "🔄 **Flipping...**", "📀 **Flipping...**", "🔄 **Flipping...**"]
+    msg = await ctx.send(frames[0])
+    for frame in frames[1:]:
+        await asyncio.sleep(0.6)
+        await msg.edit(content=frame)
+
     result = random.choice(["heads", "tails"])
     win = choice == result
 
     # Quest progress
     await db.update_quest_progress(user_id, "gamble")
 
-    embed = discord.Embed(title="🪙 Coinflip", color=0x3498DB)
-    embed.description = f"The coin spun in the air and landed on... **{result.upper()}**!\n\n"
+    embed = discord.Embed(title="🪙 Coinflip Result", color=0x3498DB)
+    embed.description = f"The coin landed on... **{result.upper()}**!\n\n"
 
     if win:
         await db.update_balance(user_id, bet_amount)
@@ -2514,7 +2521,7 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
         embed.description += f"💀 **LOSE!** You lost **{bet_amount:,}** {CURRENCY_NAME}."
         embed.color = 0xE74C3C
 
-    await ctx.send(embed=embed)
+    await msg.edit(content=None, embed=embed)
 
 @bot.command(name="leaderboard", aliases=["lb", "rich", "top"])
 async def leaderboard_cmd(ctx: commands.Context):
@@ -2537,6 +2544,22 @@ async def leaderboard_cmd(ctx: commands.Context):
     embed.set_footer(text="Total wealth = Wallet + Bank")
     await ctx.send(embed=embed)
 
+@bot.group(name="set", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def set_group(ctx: commands.Context):
+    """Admin command to set user data. Usage: !set <paradoxy/vouches>"""
+    await ctx.send(f"❓ Usage: `{PREFIX}set <paradoxy/vouches> @user <amount>`")
+
+@set_group.command(name="paradoxy", aliases=["money", "bal"])
+@commands.has_permissions(administrator=True)
+async def set_paradoxy(ctx: commands.Context, member: discord.Member, amount: int):
+    """Set a user's wallet balance. Admin only."""
+    # We update the balance to the target amount by finding the difference
+    current = await db.get_balance(str(member.id))
+    diff = amount - current
+    await db.update_balance(str(member.id), diff)
+    await ctx.send(f"✅ Set **{member.display_name}**'s wallet to **{amount:,}** {CURRENCY_NAME}.")
+
 
 
 # ── GAMBLING GAMES ────────────────────────────
@@ -2556,6 +2579,13 @@ async def slots_cmd(ctx: commands.Context, bet: int):
 
     symbols = ["🍒", "🍋", "🍇", "💎", "⭐", "🔔"]
     
+    # Animation frames
+    rolling_msg = await ctx.send(f"🎰 **[ 🎰 | 🎰 | 🎰 ]**\n*Spinning...*")
+    for _ in range(3):
+        await asyncio.sleep(0.7)
+        temp_results = [random.choice(symbols) for _ in range(3)]
+        await rolling_msg.edit(content=f"🎰 **[ {' | '.join(temp_results)} ]**\n*Spinning...*")
+
     results = [random.choice(symbols) for _ in range(3)]
     # Simple luck: if no match, small chance to re-roll one
     if results[0] != results[1] and results[1] != results[2] and random.random() < luck_bonus:
@@ -2564,7 +2594,7 @@ async def slots_cmd(ctx: commands.Context, bet: int):
     # Quest progress
     await db.update_quest_progress(user_id, "gamble")
 
-    embed = discord.Embed(title="🎰 Paradox Slots", color=0x9B59B6)
+    embed = discord.Embed(title="🎰 Paradox Slots Result", color=0x9B59B6)
     embed.description = f"**[ {' | '.join(results)} ]**\n\n"
     
     if results[0] == results[1] == results[2]:
@@ -2582,7 +2612,7 @@ async def slots_cmd(ctx: commands.Context, bet: int):
         embed.description += f"💀 **LOSE!** You lost **{bet:,}** {CURRENCY_NAME}."
         embed.color = 0xE74C3C
         
-    await ctx.send(embed=embed)
+    await rolling_msg.edit(content=None, embed=embed)
 
 @bot.command(name="roulette")
 async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
@@ -2596,6 +2626,13 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
     luck_bonus = 0
     if "Lucky Coin" in inventory: luck_bonus += 0.05
     if "Golden Clover" in inventory: luck_bonus += 0.15
+
+    # Animation
+    roll_msg = await ctx.send("🎡 **The wheel is spinning...**")
+    wheel_frames = ["⚫ 15", "🔴 32", "⚫ 4", "🟢 0", "🔴 19", "⚫ 10"]
+    for i in range(3):
+        await asyncio.sleep(0.7)
+        await roll_msg.edit(content=f"🎡 **The wheel is spinning...**\n`[ {wheel_frames[i*2]} | {wheel_frames[i*2+1]} ]`")
 
     number = random.randint(0, 36)
     # Apply luck: if lose, small chance to re-roll
@@ -2635,7 +2672,7 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
         embed.description += f"💀 **LOSE!** You lost **{bet:,}** {CURRENCY_NAME}."
         embed.color = 0xE74C3C
         
-    await ctx.send(embed=embed)
+    await roll_msg.edit(content=None, embed=embed)
 
 
 # ── BLACKJACK SYSTEM ──────────────────────────
@@ -2719,6 +2756,9 @@ class BlackjackView(discord.ui.View):
     async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id: return
         
+        await interaction.response.edit_message(content="⏳ **Dealer is thinking...**", view=None)
+        await asyncio.sleep(1.5)
+
         # Dealer Logic
         while self.get_score(self.dealer_hand) < 17:
             self.dealer_hand.append(self.deck.pop())
@@ -2765,7 +2805,10 @@ class BlackjackView(discord.ui.View):
         embed = self.create_embed(revealed=True)
         embed.color = color
         embed.description = msg
-        await interaction.response.edit_message(embed=embed, view=self)
+        if interaction.response.is_done():
+            await interaction.edit_original_response(content=None, embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(content=None, embed=embed, view=self)
 
 # ── SHOP SYSTEM ──────────────────────────────
 
@@ -2903,10 +2946,14 @@ class CrimeDifficultyView(discord.ui.View):
 @commands.cooldown(1, 300, commands.BucketType.user)
 async def heist_cmd(ctx: commands.Context):
     """Start a strategic heist. Choose your difficulty!"""
+    # Animation
+    msg = await ctx.send("🏦 **Preparing the heist equipment...**")
+    await asyncio.sleep(2.0)
+
     embed = discord.Embed(title="🏦 Strategic Heist", color=0x34495E)
     embed.description = "Choose the difficulty for your operation. Higher difficulty means higher risk but massive payouts!"
     view = CrimeDifficultyView(ctx)
-    await ctx.send(embed=embed, view=view)
+    await msg.edit(content=None, embed=embed, view=view)
 
 @bot.command(name="crime")
 @commands.cooldown(1, 60, commands.BucketType.user)
@@ -2921,6 +2968,10 @@ async def crime_cmd(ctx: commands.Context):
         {"name": "Smuggling", "msg": "You successfully moved 'restricted items' across the border!", "win_range": (15000, 35000), "fail_msg": "Customs found the hidden compartment!", "fine_range": (5000, 15000), "chance": 0.4},
         {"name": "Bank Heist", "msg": "You cracked the vault at the local branch!", "win_range": (40000, 80000), "fail_msg": "SWAT was waiting at the exit!", "fine_range": (15000, 25000), "chance": 0.25}
     ]
+    
+    # Animation
+    msg = await ctx.send("🕵️ **Planning the crime...**")
+    await asyncio.sleep(2.0)
     
     crime = random.choice(scenarios)
     
@@ -2944,7 +2995,7 @@ async def crime_cmd(ctx: commands.Context):
         embed = discord.Embed(title=f"🚨 Busted: {crime['name']}", description=f"{crime['fail_msg']}\n\nYou were fined **{loss:,}** {CURRENCY_NAME}!", color=0xE74C3C)
     
     embed.set_footer(text="Paradox Bot 💜 | Use !heist for bigger jobs")
-    await ctx.send(embed=embed)
+    await msg.edit(content=None, embed=embed)
 
 
 @bot.command(name="steal")
