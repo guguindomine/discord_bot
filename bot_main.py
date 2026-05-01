@@ -403,8 +403,8 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}buy <item>` - Purchase an item\n"
                 f"`{prefix}inventory [@user]` - View your items\n\n"
                 f"**Bank:**\n"
-                f"`{prefix}bankincrease` - Check bank growth and interest projection\n"
-                f"`{prefix}bank interest` - Same as bankincrease, shows potential hourly interest"
+                f"`{prefix}bank info` - Show your bank amount and interest earnings\n"
+                f"`{prefix}bank deposit/withdraw <amount>` - Bank (1.1–2.3% hourly)"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -2401,14 +2401,14 @@ async def send_bank_interest(ctx: commands.Context):
     embed.set_footer(text="Keep money in the bank to earn variable hourly interest.")
     await ctx.send(embed=embed)
 
-@bot.command(name="bankincrease", aliases=["checkbankincrease", "bankgrowth", "bankinterest"])
-async def bank_increase_cmd(ctx: commands.Context):
-    """Check your bank balance and interest projection."""
-    await send_bank_interest(ctx)
+@bot.group(name="bank", invoke_without_command=True)
+async def bank_group(ctx: commands.Context):
+    """Manage your bank. Usage: !bank deposit <amount> or !bank withdraw <amount>"""
+    await ctx.send("❓ Usage: `!bank deposit <amount>` or `!bank withdraw <amount>`")
 
-@bank_group.command(name="interest", aliases=["growth", "increase"])
-async def bank_interest(ctx: commands.Context):
-    """Show projected interest increases for your bank balance."""
+@bank_group.command(name="info", aliases=["interest", "growth", "increase"])
+async def bank_info(ctx: commands.Context):
+    """Show your bank amount and how much interest it may earn."""
     await send_bank_interest(ctx)
 
 @bot.command(name="shop")
@@ -2524,47 +2524,6 @@ async def work_cmd(ctx: commands.Context):
     # Quest progress
     await db.update_quest_progress(str(ctx.author.id), "work")
     await ctx.send(f"💼 You worked as a **{job}** and earned **{amount:,}** {CURRENCY_NAME}!")
-
-@bot.group(name="bank", invoke_without_command=True)
-async def bank_group(ctx: commands.Context):
-    """Manage your bank. Usage: !bank deposit <amt> or !bank withdraw <amt>"""
-    await ctx.send("❓ Usage: `!bank deposit <amount>` or `!bank withdraw <amount>`")
-
-@bank_group.command(name="deposit", aliases=["dep"])
-async def bank_deposit(ctx: commands.Context, amount: str):
-    user_id = str(ctx.author.id)
-    wallet = await db.get_balance(user_id)
-    
-    if amount.lower() == "all":
-        amount = wallet
-    else:
-        try: amount = int(amount)
-        except: return await ctx.send("❌ Please provide a valid number.")
-
-    if amount <= 0 or amount > wallet:
-        return await ctx.send("❌ Invalid amount.")
-
-    await db.update_balance(user_id, -amount)
-    await db.update_bank(user_id, amount)
-    await ctx.send(f"🏦 Deposited **{amount:,}** {CURRENCY_NAME} into your bank!")
-
-@bank_group.command(name="withdraw", aliases=["with"])
-async def bank_withdraw(ctx: commands.Context, amount: str):
-    user_id = str(ctx.author.id)
-    bank = await db.get_bank(user_id)
-    
-    if amount.lower() == "all":
-        amount = bank
-    else:
-        try: amount = int(amount)
-        except: return await ctx.send("❌ Please provide a valid number.")
-
-    if amount <= 0 or amount > bank:
-        return await ctx.send("❌ Invalid amount.")
-
-    await db.update_bank(user_id, -amount)
-    await db.update_balance(user_id, amount)
-    await ctx.send(f"🏦 Withdrew **{amount:,}** {CURRENCY_NAME} from your bank!")
 
 @bot.command(name="give", aliases=["pay", "transfer"])
 async def give_cmd(ctx: commands.Context, member: discord.Member, amount: str):
