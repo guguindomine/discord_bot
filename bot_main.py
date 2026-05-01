@@ -335,6 +335,7 @@ class HelpSelect(discord.ui.Select):
             embed.title = "📊 General & Stats"
             embed.description = (
                 f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
+                f"`{prefix}saycolor <color> <text>` - Send a colored message\n"
                 f"`{prefix}swearlog [@user]` - View infraction history/top\n"
                 f"`{prefix}vouches [@user]` - Check your vouch level\n"
                 f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
@@ -2113,6 +2114,27 @@ async def setvouches_cmd(ctx: commands.Context, member: discord.Member, vouches:
     
     level = (vouches // 5) + 1
     await ctx.send(f"✅ Set **{member.display_name}** to **{vouches}** vouches (Level {level}).")
+
+@bot.command(name="saycolor")
+async def say_color_cmd(ctx: commands.Context, color: str, *, text: str):
+    """Sends a message in a specific color using ANSI blocks."""
+    colors = {
+        "grey": "30", "red": "31", "green": "32", "yellow": "33",
+        "blue": "34", "pink": "35", "cyan": "36", "white": "37"
+    }
+    
+    code = colors.get(color.lower())
+    if not code:
+        await ctx.send(f"❌ Color not found! Use: {', '.join(colors.keys())}")
+        return
+        
+    # \u001b is the escape character for ANSI
+    ansi_text = f"```ansi\n\u001b[{code}m{text}\u001b[0m\n```"
+    await ctx.send(ansi_text)
+    
+    # Optional: Delete the user's original command to make it look cleaner
+    try: await ctx.message.delete()
+    except: pass
 
 
 # ── !add & !remove (Ticket Management) ────────
