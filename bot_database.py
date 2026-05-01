@@ -1,6 +1,7 @@
 import motor.motor_asyncio
 import os
 from datetime import datetime
+from pymongo import ReturnDocument
 
 class BotDatabase:
     def __init__(self):
@@ -35,7 +36,7 @@ class BotDatabase:
             {"_id": user_id},
             {"$inc": {"scam_strikes": 1}},
             upsert=True,
-            return_document=motor.motor_asyncio.AsyncIOMotorCollection.RETURN_DOCUMENT_AFTER
+            return_document=ReturnDocument.AFTER
         )
         return result.get("scam_strikes", 0)
 
@@ -60,7 +61,7 @@ class BotDatabase:
             {"_id": user_id},
             {"$push": {"infractions": infraction}},
             upsert=True,
-            return_document=motor.motor_asyncio.AsyncIOMotorCollection.RETURN_DOCUMENT_AFTER
+            return_document=ReturnDocument.AFTER
         )
         return len(result.get("infractions", []))
 
@@ -109,7 +110,7 @@ class BotDatabase:
 
     async def get_all_users(self) -> list:
         """Returns all user documents from the database."""
-        if not self.db: return []
+        if self.db is None: return []
         cursor = self.db.users.find({})
         users = []
         async for doc in cursor:
