@@ -23,7 +23,9 @@ except ImportError:
         pass
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
+import random
+import asyncio
 from datetime import datetime, timedelta
 from bot_functions import (
     load_config,
@@ -67,6 +69,30 @@ intents.members = True          # Needed for on_member_join / on_member_remove
 intents.message_content = True  # Needed to read message content
 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
+
+# ── ECONOMY SETTINGS ──
+CURRENCY_NAME = "paradoxy"
+
+# Dynamic interest rate tier probabilities:
+#  90% → normal  (1.1% – 2.3%)
+#   5% → low     (0.7% – 1.1%)
+#   5% → high    (2.3% – 3.0%)
+@tasks.loop(hours=1)
+async def apply_interest_task():
+    """Apply dynamic variable interest to all bank balances every hour."""
+    roll = random.random()
+    if roll < 0.05:
+        rate = random.uniform(0.7, 1.1)
+        tier = "📉 Low"
+    elif roll < 0.10:
+        rate = random.uniform(2.3, 3.0)
+        tier = "📈 High"
+    else:
+        rate = random.uniform(1.1, 2.3)
+        tier = "📊 Normal"
+    multiplier = 1 + rate / 100
+    await db.apply_bank_interest(multiplier)
+    print(f"  [ECONOMY] Hourly bank interest applied: {rate:.2f}% ({tier})")
 
 
 # ══════════════════════════════════════════════
@@ -256,7 +282,8 @@ class HelpSelect(discord.ui.Select):
             discord.SelectOption(label="Server Boost", description="Rewards, Logs & Special Roles", emoji="💎", value="boost"),
             discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Cleanup", emoji="🔨", value="mod"),
             discord.SelectOption(label="Security & Filter", description="Anti-Scam, Quarantine & Swear Filter", emoji="🛡️", value="security"),
-            discord.SelectOption(label="General & Stats", description="Polls, Info & Server data", emoji="📊", value="general")
+            discord.SelectOption(label="General & Stats", description="Polls, Info & Server data", emoji="📊", value="general"),
+            discord.SelectOption(label="Economy & Casino", description="Gambling, Bank & Paradoxals", emoji="🪙", value="economy")
         ]
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
@@ -342,6 +369,30 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
                 f"`{prefix}help paradox` - Open this menu"
+            )
+        elif cat == "economy":
+            embed.title = "🪙 Paradoxy Economy"
+            embed.description = (
+                f"`{prefix}balance [@user]` - Wallet, bank & active effects\n"
+                f"`{prefix}daily` - Claim daily reward (streak bonus!)\n"
+                f"`{prefix}work` - Safe earnings every 5 minutes\n"
+                f"`{prefix}give <@user> <amount>` - Transfer paradoxy\n"
+                f"`{prefix}bank deposit/withdraw <amount>` - Bank (1.1–2.3% hourly)\n"
+                f"`{prefix}leaderboard` - Top 10 richest members\n"
+                f"`{prefix}quests` - View & track daily quests\n\n"
+                f"**Casino:**\n"
+                f"`{prefix}cf <bet> [heads/tails]` - Coinflip 50/50\n"
+                f"`{prefix}slots <bet>` - Slot machine\n"
+                f"`{prefix}bj <bet>` - Blackjack (Hit/Stand/Double)\n"
+                f"`{prefix}roulette <bet> <red/black/green/num>` - Roulette\n\n"
+                f"**Crime:**\n"
+                f"`{prefix}crime` - Quick random crime (60s cooldown)\n"
+                f"`{prefix}heist` - Strategic crime (choose difficulty)\n"
+                f"`{prefix}steal <@user>` - Rob someone's wallet\n\n"
+                f"**Shop:**\n"
+                f"`{prefix}shop` - Browse items\n"
+                f"`{prefix}buy <item>` - Purchase an item\n"
+                f"`{prefix}inventory [@user]` - View your items"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -511,6 +562,10 @@ async def on_ready():
     bot.add_view(MacroTicketView())
     bot.add_view(HelperTicketView())
     bot.add_view(TicketControlView())
+
+    # Start economy background tasks
+    if not apply_interest_task.is_running():
+        apply_interest_task.start()
 
     print("═" * 50)
     print(f"  ✅  Paradox Bot is ONLINE!")
@@ -2271,8 +2326,835 @@ async def on_command_error(ctx: commands.Context, error):
 
 
 # ══════════════════════════════════════════════
-#  START THE BOT
+#  ECONOMY & CASINO SYSTEM
 # ══════════════════════════════════════════════
+
+@bot.command(name="balance", aliases=["bal", "money"])
+async def balance_cmd(ctx: commands.Context, member: discord.Member = None):
+    """Check your Paradoxal balance and bank storage."""
+    member = member or ctx.author
+    wallet = await db.get_balance(str(member.id))
+    bank = await db.get_bank(str(member.id))
+    inventory = await db.get_inventory(str(member.id))
+    
+    embed = discord.Embed(title=f"💰 Economy: {member.display_name}", color=0xF1C40F)
+    embed.add_field(name="Wallet", value=f"**{wallet:,}** {CURRENCY_NAME}", inline=True)
+    embed.add_field(name="Bank", value=f"**{bank:,}** {CURRENCY_NAME}", inline=True)
+    embed.add_field(name="Total", value=f"**{wallet + bank:,}** {CURRENCY_NAME}", inline=False)
+    
+    # Active Effects / Inventory Summary
+    if inventory:
+        effects = []
+        if "Lucky Coin" in inventory: effects.append("🍀 Luck +5%")
+        if "Golden Clover" in inventory: effects.append("🍀 Luck +15%")
+        if "Thief Kit" in inventory: effects.append("🧤 Steal +10%")
+        if "Crime Mask" in inventory: effects.append("👺 Crime +15%")
+        if "Shield" in inventory: effects.append("🛡️ Shielded")
+        if "VIP Pass" in inventory: effects.append("💎 VIP (+50% Daily)")
+        
+        if effects:
+            embed.add_field(name="Active Effects", value=", ".join(effects), inline=False)
+
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"Paradox Bot 💜 | Bank earns variable interest (1.1-2.3% hourly)")
+    await ctx.send(embed=embed)
+
+@bot.command(name="daily")
+async def daily_cmd(ctx: commands.Context):
+    """Claim your daily paradoxals."""
+    user_id = str(ctx.author.id)
+    last_claim = await db.get_cooldown(user_id, "daily")
+    
+    if last_claim:
+        # Check if 24 hours passed
+        if datetime.now() < last_claim + timedelta(days=1):
+            remaining = (last_claim + timedelta(days=1)) - datetime.now()
+            hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+            await ctx.send(f"❌ You already claimed your daily! Try again in **{hours}h {minutes}m**.")
+            return
+
+    amount = random.randint(5000, 15000)
+    
+    # VIP Pass check
+    inventory = await db.get_inventory(user_id)
+    if "VIP Pass" in inventory:
+        amount = int(amount * 1.5) # +50% bonus
+        
+    await db.update_balance(user_id, amount)
+    await db.set_cooldown(user_id, "daily", datetime.now())
+    # Quest progress
+    await db.update_quest_progress(user_id, "daily")
+    await ctx.send(f"🎁 You claimed your daily reward of **{amount:,}** {CURRENCY_NAME}!")
+
+@bot.command(name="work")
+@commands.cooldown(1, 300, commands.BucketType.user) # 5 min cooldown
+async def work_cmd(ctx: commands.Context):
+    """Work to earn some paradoxals safely."""
+    amount = random.randint(500, 2500)
+    jobs = ["Developer", "Designer", "Scripter", "Moderator", "Artist", "Gamer"]
+    job = random.choice(jobs)
+    
+    await db.update_balance(str(ctx.author.id), amount)
+    # Quest progress
+    await db.update_quest_progress(str(ctx.author.id), "work")
+    await ctx.send(f"💼 You worked as a **{job}** and earned **{amount:,}** {CURRENCY_NAME}!")
+
+@bot.group(name="bank", invoke_without_command=True)
+async def bank_group(ctx: commands.Context):
+    """Manage your bank. Usage: !bank deposit <amt> or !bank withdraw <amt>"""
+    await ctx.send("❓ Usage: `!bank deposit <amount>` or `!bank withdraw <amount>`")
+
+@bank_group.command(name="deposit", aliases=["dep"])
+async def bank_deposit(ctx: commands.Context, amount: str):
+    user_id = str(ctx.author.id)
+    wallet = await db.get_balance(user_id)
+    
+    if amount.lower() == "all":
+        amount = wallet
+    else:
+        try: amount = int(amount)
+        except: return await ctx.send("❌ Please provide a valid number.")
+
+    if amount <= 0 or amount > wallet:
+        return await ctx.send("❌ Invalid amount.")
+
+    await db.update_balance(user_id, -amount)
+    await db.update_bank(user_id, amount)
+    await ctx.send(f"🏦 Deposited **{amount:,}** {CURRENCY_NAME} into your bank!")
+
+@bank_group.command(name="withdraw", aliases=["with"])
+async def bank_withdraw(ctx: commands.Context, amount: str):
+    user_id = str(ctx.author.id)
+    bank = await db.get_bank(user_id)
+    
+    if amount.lower() == "all":
+        amount = bank
+    else:
+        try: amount = int(amount)
+        except: return await ctx.send("❌ Please provide a valid number.")
+
+    if amount <= 0 or amount > bank:
+        return await ctx.send("❌ Invalid amount.")
+
+    await db.update_bank(user_id, -amount)
+    await db.update_balance(user_id, amount)
+    await ctx.send(f"🏦 Withdrew **{amount:,}** {CURRENCY_NAME} from your bank!")
+
+@bot.command(name="give", aliases=["pay", "transfer"])
+async def give_cmd(ctx: commands.Context, member: discord.Member, amount: str):
+    """Transfer paradoxy to another user. Usage: !give @user <amount>"""
+    if member.id == ctx.author.id:
+        return await ctx.send("❌ You can't give money to yourself!")
+    if member.bot:
+        return await ctx.send("❌ You can't give money to bots!")
+
+    user_id = str(ctx.author.id)
+    wallet = await db.get_balance(user_id)
+
+    if amount.lower() == "all":
+        amount = wallet
+    else:
+        try: amount = int(amount)
+        except: return await ctx.send("❌ Please provide a valid number.")
+
+    if amount <= 0:
+        return await ctx.send("❌ Amount must be positive.")
+    if amount > wallet:
+        return await ctx.send("❌ You don't have enough paradoxy in your wallet!")
+
+    await db.update_balance(user_id, -amount)
+    await db.update_balance(str(member.id), amount)
+    
+    embed = discord.Embed(
+        description=f"💸 {ctx.author.mention} transferred **{amount:,}** {CURRENCY_NAME} to {member.mention}!",
+        color=0x2ECC71
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="cf", aliases=["coinflip", "flip"])
+async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
+    """Flip a coin and win double your bet! Usage: !cf <bet> [heads/tails]"""
+    user_id = str(ctx.author.id)
+    balance = await db.get_balance(user_id)
+
+    if bet.lower() == "all":
+        bet_amount = balance
+    else:
+        try: bet_amount = int(bet)
+        except: return await ctx.send("❌ Please provide a valid bet amount.")
+
+    if bet_amount <= 0:
+        return await ctx.send("❌ Bet must be positive.")
+    if bet_amount > balance:
+        return await ctx.send("❌ You don't have enough paradoxy!")
+
+    choice = choice.lower()
+    if choice not in ["heads", "tails", "h", "t"]:
+        return await ctx.send("❌ Choose `heads` or `tails`.")
+    
+    if choice == "h": choice = "heads"
+    if choice == "t": choice = "tails"
+
+    result = random.choice(["heads", "tails"])
+    win = choice == result
+
+    # Quest progress
+    await db.update_quest_progress(user_id, "gamble")
+
+    embed = discord.Embed(title="🪙 Coinflip", color=0x3498DB)
+    embed.description = f"The coin spun in the air and landed on... **{result.upper()}**!\n\n"
+
+    if win:
+        await db.update_balance(user_id, bet_amount)
+        embed.description += f"🎉 **WIN!** You won **{bet_amount:,}** {CURRENCY_NAME}!"
+        embed.color = 0x2ECC71
+    else:
+        await db.update_balance(user_id, -bet_amount)
+        embed.description += f"💀 **LOSE!** You lost **{bet_amount:,}** {CURRENCY_NAME}."
+        embed.color = 0xE74C3C
+
+    await ctx.send(embed=embed)
+
+@bot.command(name="leaderboard", aliases=["lb", "rich", "top"])
+async def leaderboard_cmd(ctx: commands.Context):
+    """View the richest users in the server."""
+    lb_data = await db.get_leaderboard(10)
+    if not lb_data:
+        return await ctx.send("ℹ️ No wealth data available yet.")
+
+    embed = discord.Embed(title=f"🏆 Wealth Leaderboard | {ctx.guild.name}", color=0xF1C40F)
+    
+    desc = ""
+    for i, user_doc in enumerate(lb_data, 1):
+        user_id = int(user_doc["_id"])
+        user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+        name = user.name if user else f"ID: {user_id}"
+        total = user_doc["total"]
+        desc += f"{i}. **{name}** — {total:,} {CURRENCY_NAME}\n"
+    
+    embed.description = desc
+    embed.set_footer(text="Total wealth = Wallet + Bank")
+    await ctx.send(embed=embed)
+
+
+
+# ── GAMBLING GAMES ────────────────────────────
+
+@bot.command(name="slots")
+async def slots_cmd(ctx: commands.Context, bet: int):
+    """Spin the slot machine. Wins multiply your bet!"""
+    user_id = str(ctx.author.id)
+    balance = await db.get_balance(user_id)
+    if bet <= 0 or bet > balance:
+        return await ctx.send("❌ You don't have enough paradoxals!")
+
+    inventory = await db.get_inventory(user_id)
+    luck_bonus = 0
+    if "Lucky Coin" in inventory: luck_bonus += 0.05
+    if "Golden Clover" in inventory: luck_bonus += 0.15
+
+    symbols = ["🍒", "🍋", "🍇", "💎", "⭐", "🔔"]
+    
+    results = [random.choice(symbols) for _ in range(3)]
+    # Simple luck: if no match, small chance to re-roll one
+    if results[0] != results[1] and results[1] != results[2] and random.random() < luck_bonus:
+        results[2] = random.choice(symbols)
+
+    # Quest progress
+    await db.update_quest_progress(user_id, "gamble")
+
+    embed = discord.Embed(title="🎰 Paradox Slots", color=0x9B59B6)
+    embed.description = f"**[ {' | '.join(results)} ]**\n\n"
+    
+    if results[0] == results[1] == results[2]:
+        payout = bet * 10
+        await db.update_balance(user_id, payout)
+        embed.description += f"🎉 **JACKPOT!** You won **{payout:,}** {CURRENCY_NAME}!"
+        embed.color = 0x2ECC71
+    elif results[0] == results[1] or results[1] == results[2] or results[0] == results[2]:
+        payout = bet * 2
+        await db.update_balance(user_id, payout)
+        embed.description += f"✨ **WIN!** You won **{payout:,}** {CURRENCY_NAME}!"
+        embed.color = 0x3498DB
+    else:
+        await db.update_balance(user_id, -bet)
+        embed.description += f"💀 **LOSE!** You lost **{bet:,}** {CURRENCY_NAME}."
+        embed.color = 0xE74C3C
+        
+    await ctx.send(embed=embed)
+
+@bot.command(name="roulette")
+async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
+    """Play roulette. Choices: red, black, green, or a number 0-36."""
+    user_id = str(ctx.author.id)
+    balance = await db.get_balance(user_id)
+    if bet <= 0 or bet > balance:
+        return await ctx.send("❌ You don't have enough paradoxals!")
+        
+    inventory = await db.get_inventory(user_id)
+    luck_bonus = 0
+    if "Lucky Coin" in inventory: luck_bonus += 0.05
+    if "Golden Clover" in inventory: luck_bonus += 0.15
+
+    number = random.randint(0, 36)
+    # Apply luck: if lose, small chance to re-roll
+    if random.random() < luck_bonus:
+        number = random.randint(0, 36) # Second chance
+
+    # Quest progress
+    await db.update_quest_progress(user_id, "gamble")
+
+    red_numbers = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
+    win = False
+    payout = 0
+    
+    if choice.lower() == "red" and number in red_numbers:
+        win = True
+        payout = bet * 2
+    elif choice.lower() == "black" and number != 0 and number not in red_numbers:
+        win = True
+        payout = bet * 2
+    elif choice.lower() == "green" and number == 0:
+        win = True
+        payout = bet * 35
+    elif choice.isdigit() and int(choice) == number:
+        win = True
+        payout = bet * 35
+        
+    embed = discord.Embed(title="🎡 Paradox Roulette", color=0x34495E)
+    color_name = "🟢 Green" if number == 0 else ("🔴 Red" if number in red_numbers else "⚫ Black")
+    embed.description = f"The ball landed on: **{number} ({color_name})**\n\n"
+    
+    if win:
+        await db.update_balance(user_id, payout)
+        embed.description += f"🎉 **WIN!** You won **{payout:,}** {CURRENCY_NAME}!"
+        embed.color = 0x2ECC71
+    else:
+        await db.update_balance(user_id, -bet)
+        embed.description += f"💀 **LOSE!** You lost **{bet:,}** {CURRENCY_NAME}."
+        embed.color = 0xE74C3C
+        
+    await ctx.send(embed=embed)
+
+
+# ── BLACKJACK SYSTEM ──────────────────────────
+
+class BlackjackView(discord.ui.View):
+    def __init__(self, ctx, user_id, bet):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.user_id = user_id
+        self.bet = bet
+        self.deck = [2,3,4,5,6,7,8,9,10,10,10,10,11] * 4
+        random.shuffle(self.deck)
+        self.player_hand = [self.deck.pop(), self.deck.pop()]
+        self.dealer_hand = [self.deck.pop(), self.deck.pop()]
+        self.message = None
+
+    def get_score(self, hand):
+        score = sum(hand)
+        if score > 21 and 11 in hand:
+            hand[hand.index(11)] = 1
+            score = sum(hand)
+        return score
+
+    def create_embed(self, revealed=False):
+        p_score = self.get_score(self.player_hand)
+        d_score = self.get_score(self.dealer_hand)
+        
+        embed = discord.Embed(title="🃏 Paradox Blackjack", color=0x3498DB)
+        embed.add_field(name="Your Hand", value=f"Cards: {', '.join(map(str, self.player_hand))}\nScore: **{p_score}**", inline=True)
+        
+        if revealed:
+            embed.add_field(name="Dealer Hand", value=f"Cards: {', '.join(map(str, self.dealer_hand))}\nScore: **{d_score}**", inline=True)
+        else:
+            embed.add_field(name="Dealer Hand", value=f"Cards: {self.dealer_hand[0]}, ?\nScore: **?**", inline=True)
+        return embed
+
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
+    async def hit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        self.player_hand.append(self.deck.pop())
+        score = self.get_score(self.player_hand)
+        
+        # Disable Double Down after hitting
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.label == "Double Down":
+                item.disabled = True
+
+        if score > 21:
+            await self.end_game(interaction, "BUST")
+        else:
+            await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Double Down", style=discord.ButtonStyle.success)
+    async def double(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        
+        balance = await db.get_balance(str(self.user_id))
+        if balance < self.bet * 2:
+            return await interaction.response.send_message("❌ You don't have enough paradoxy to double down!", ephemeral=True)
+        
+        self.bet *= 2
+        self.player_hand.append(self.deck.pop())
+        
+        # Auto-stand after 1 card
+        while self.get_score(self.dealer_hand) < 17:
+            self.dealer_hand.append(self.deck.pop())
+            
+        p_score = self.get_score(self.player_hand)
+        d_score = self.get_score(self.dealer_hand)
+        
+        if p_score > 21:
+            await self.end_game(interaction, "BUST")
+        elif d_score > 21 or p_score > d_score:
+            await self.end_game(interaction, "WIN")
+        elif p_score < d_score:
+            await self.end_game(interaction, "LOSE")
+        else:
+            await self.end_game(interaction, "PUSH")
+
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
+    async def stand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        
+        # Dealer Logic
+        while self.get_score(self.dealer_hand) < 17:
+            self.dealer_hand.append(self.deck.pop())
+            
+        p_score = self.get_score(self.player_hand)
+        d_score = self.get_score(self.dealer_hand)
+        
+        if d_score > 21 or p_score > d_score:
+            await self.end_game(interaction, "WIN")
+        elif p_score < d_score:
+            await self.end_game(interaction, "LOSE")
+        else:
+            await self.end_game(interaction, "PUSH")
+
+    async def end_game(self, interaction, result):
+        self.stop()
+        for child in self.children: child.disabled = True
+        
+        # Apply luck items for blackjack (can prevent a lose 10% of the time)
+        inventory = await db.get_inventory(str(self.user_id))
+        if result == "LOSE" or result == "BUST":
+            luck_chance = 0.05 if "Lucky Coin" in inventory else 0
+            if "Golden Clover" in inventory: luck_chance += 0.15
+            
+            if random.random() < luck_chance:
+                result = "PUSH" # Lucky save!
+        
+        if result == "WIN":
+            await db.update_balance(str(self.user_id), self.bet)
+            # Quest progress
+            if self.bet > 0: await db.update_quest_progress(str(self.user_id), "gamble")
+            msg = f"🏆 **You Won!** You gained **{self.bet:,}** {CURRENCY_NAME}."
+            color = 0x2ECC71
+        elif result == "LOSE" or result == "BUST":
+            await db.update_balance(str(self.user_id), -self.bet)
+            # Quest progress
+            await db.update_quest_progress(str(self.user_id), "gamble")
+            msg = f"💀 **You Lost!** You lost **{self.bet:,}** {CURRENCY_NAME}."
+            color = 0xE74C3C
+        else:
+            msg = "🤝 **Push!** Your paradoxy were returned."
+            color = 0xF1C40F
+            
+        embed = self.create_embed(revealed=True)
+        embed.color = color
+        embed.description = msg
+        await interaction.response.edit_message(embed=embed, view=self)
+
+# ── SHOP SYSTEM ──────────────────────────────
+
+SHOP_ITEMS = {
+    "lucky_coin": {"name": "Lucky Coin", "price": 50000, "desc": "Increases casino luck by 5%"},
+    "golden_clover": {"name": "Golden Clover", "price": 200000, "desc": "Increases casino luck by 15%"},
+    "thief_kit": {"name": "Thief Kit", "price": 75000, "desc": "Increases stealing success chance by 10%"},
+    "crime_mask": {"name": "Crime Mask", "price": 100000, "desc": "Increases crime success by 15% and reduces fines by 30%"},
+    "shield": {"name": "Shield", "price": 80000, "desc": "30% chance to block a steal attempt from others"},
+    "vip_pass": {"name": "VIP Pass", "price": 500000, "desc": "Permanent +50% bonus on daily rewards"},
+}
+
+@bot.command(name="shop")
+async def shop_cmd(ctx: commands.Context):
+    """View items available in the Paradoxal Shop."""
+    embed = discord.Embed(title="🛒 Paradoxal Shop", color=0x2ECC71)
+    for item_id, info in SHOP_ITEMS.items():
+        embed.add_field(
+            name=f"{info['name']} — {info['price']:,} {CURRENCY_NAME}",
+            value=info['desc'],
+            inline=False
+        )
+    embed.set_footer(text="Usage: !buy <item_name>")
+    await ctx.send(embed=embed)
+
+@bot.command(name="buy")
+async def buy_cmd(ctx: commands.Context, *, item_name: str):
+    """Buy an item from the shop."""
+    user_id = str(ctx.author.id)
+    item_id = item_name.lower().replace(" ", "_")
+    
+    if item_id not in SHOP_ITEMS:
+        return await ctx.send("❌ Item not found in shop!")
+        
+    item = SHOP_ITEMS[item_id]
+    balance = await db.get_balance(user_id)
+    inventory = await db.get_inventory(user_id)
+    
+    if item['name'] in inventory:
+        return await ctx.send("❌ You already own this item!")
+        
+    if balance < item['price']:
+        return await ctx.send(f"❌ You need **{item['price']:,}** {CURRENCY_NAME} to buy this!")
+        
+    await db.update_balance(user_id, -item['price'])
+    await db.add_item(user_id, item['name'])
+    await ctx.send(f"✅ You bought **{item['name']}** for **{item['price']:,}** {CURRENCY_NAME}!")
+
+@bot.command(name="inventory", aliases=["inv"])
+async def inventory_cmd(ctx: commands.Context, member: discord.Member = None):
+    """Check your inventory."""
+    member = member or ctx.author
+    inv = await db.get_inventory(str(member.id))
+    
+    embed = discord.Embed(title=f"🎒 Inventory: {member.display_name}", color=0x3498DB)
+    embed.description = "\n".join([f"• {item}" for item in inv]) if inv else "Inventory is empty."
+    await ctx.send(embed=embed)
+
+@bot.command(name="bj", aliases=["blackjack"])
+async def blackjack_cmd(ctx: commands.Context, bet: int):
+    """Play a game of Blackjack."""
+    user_id = str(ctx.author.id)
+    balance = await db.get_balance(user_id)
+    if bet <= 0 or bet > balance:
+        return await ctx.send("❌ You don't have enough paradoxals!")
+        
+    view = BlackjackView(ctx, ctx.author.id, bet)
+    embed = view.create_embed()
+    msg = await ctx.send(embed=embed, view=view)
+    view.message = msg
+
+
+# ── CRIME & STEAL ─────────────────────────────
+
+class CrimeDifficultyView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.user_id = ctx.author.id
+
+    async def start_minigame(self, interaction, difficulty):
+        self.stop()
+        
+        # Minigame: Simple Math
+        a, b = random.randint(1, 20), random.randint(1, 20)
+        correct_answer = a + b
+        
+        embed = discord.Embed(title="🕵️ Crime in Progress...", color=0xF1C40F)
+        embed.description = f"To complete the crime, solve this quickly:\n**{a} + {b} = ?**"
+        await interaction.response.edit_message(embed=embed, view=None)
+        
+        def check(m):
+            return m.author.id == self.user_id and m.channel.id == self.ctx.channel.id and m.content.isdigit()
+            
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=10.0)
+            if int(msg.content) == correct_answer:
+                await self.handle_result(difficulty, True)
+            else:
+                await self.handle_result(difficulty, False)
+        except asyncio.TimeoutError:
+            await self.handle_result(difficulty, False)
+
+    async def handle_result(self, difficulty, minigame_success):
+        user_id = str(self.user_id)
+        inventory = await db.get_inventory(user_id)
+        luck_bonus = 0.05 if "Thief Kit" in inventory else 0
+        
+        # Base success chances
+        chances = {"easy": 0.85, "normal": 0.65, "hard": 0.40}
+        success_chance = chances[difficulty] + luck_bonus
+        
+        if minigame_success and random.random() < success_chance:
+            # Win
+            rewards = {"easy": (2000, 5000), "normal": (7000, 15000), "hard": (20000, 60000)}
+            min_p, max_p = rewards[difficulty]
+            amount = random.randint(min_p, max_p)
+            await db.update_balance(user_id, amount)
+            
+            embed = discord.Embed(title="✅ Crime Successful!", color=0x2ECC71)
+            embed.description = f"You successfully completed a **{difficulty}** crime and earned **{amount:,}** {CURRENCY_NAME}!"
+            await self.ctx.send(embed=embed)
+        else:
+            # Lose
+            fines = {"easy": (1000, 2000), "normal": (3000, 8000), "hard": (10000, 25000)}
+            min_f, max_f = fines[difficulty]
+            loss = random.randint(min_f, max_f)
+            await db.update_balance(user_id, -loss)
+            
+            embed = discord.Embed(title="🚨 BUSTED!", color=0xE74C3C)
+            embed.description = f"You failed the **{difficulty}** heist and were fined **{loss:,}** {CURRENCY_NAME}!"
+            await self.ctx.send(embed=embed)
+
+@bot.command(name="heist")
+@commands.cooldown(1, 300, commands.BucketType.user)
+async def heist_cmd(ctx: commands.Context):
+    """Start a strategic heist. Choose your difficulty!"""
+    embed = discord.Embed(title="🏦 Strategic Heist", color=0x34495E)
+    embed.description = "Choose the difficulty for your operation. Higher difficulty means higher risk but massive payouts!"
+    view = CrimeDifficultyView(ctx)
+    await ctx.send(embed=embed, view=view)
+
+@bot.command(name="crime")
+@commands.cooldown(1, 60, commands.BucketType.user)
+async def crime_cmd(ctx: commands.Context):
+    """Commit a quick random crime for fast cash."""
+    user_id = str(ctx.author.id)
+    
+    scenarios = [
+        {"name": "Pickpocketing", "msg": "You snuck through the crowd and swiped a wallet!", "win_range": (1000, 3500), "fail_msg": "You were caught with your hand in someone's pocket!", "fine_range": (500, 1500), "chance": 0.7},
+        {"name": "Vandalism", "msg": "You spray-painted the governor's car and found some cash inside!", "win_range": (2000, 5000), "fail_msg": "The alarm went off and you had to bail!", "fine_range": (1000, 2000), "chance": 0.6},
+        {"name": "Hacking", "msg": "You bypassed a local ATM's security!", "win_range": (5000, 12000), "fail_msg": "The cyber-police tracked your IP!", "fine_range": (2000, 5000), "chance": 0.5},
+        {"name": "Smuggling", "msg": "You successfully moved 'restricted items' across the border!", "win_range": (15000, 35000), "fail_msg": "Customs found the hidden compartment!", "fine_range": (5000, 15000), "chance": 0.4},
+        {"name": "Bank Heist", "msg": "You cracked the vault at the local branch!", "win_range": (40000, 80000), "fail_msg": "SWAT was waiting at the exit!", "fine_range": (15000, 25000), "chance": 0.25}
+    ]
+    
+    crime = random.choice(scenarios)
+    
+    # Inventory items (Crime Mask)
+    inventory = await db.get_inventory(user_id)
+    chance_mod = 0.15 if "Crime Mask" in inventory else 0
+    
+    success = random.random() < (crime["chance"] + chance_mod)
+    
+    # Quest progress
+    await db.update_quest_progress(user_id, "crime")
+
+    if success:
+        amount = random.randint(*crime["win_range"])
+        await db.update_balance(user_id, amount)
+        embed = discord.Embed(title=f"✅ Crime: {crime['name']}", description=f"{crime['msg']}\n\nYou earned **{amount:,}** {CURRENCY_NAME}!", color=0x2ECC71)
+    else:
+        loss = random.randint(*crime["fine_range"])
+        if "Crime Mask" in inventory: loss = int(loss * 0.7) # 30% less fine
+        await db.update_balance(user_id, -loss)
+        embed = discord.Embed(title=f"🚨 Busted: {crime['name']}", description=f"{crime['fail_msg']}\n\nYou were fined **{loss:,}** {CURRENCY_NAME}!", color=0xE74C3C)
+    
+    embed.set_footer(text="Paradox Bot 💜 | Use !heist for bigger jobs")
+    await ctx.send(embed=embed)
+
+
+@bot.command(name="steal")
+@commands.cooldown(1, 300, commands.BucketType.user)
+async def steal_cmd(ctx: commands.Context, target: discord.Member):
+    """Attempt to rob another user's wallet."""
+    if target.id == ctx.author.id: return await ctx.send("❌ You can't rob yourself.")
+    if target.bot: return await ctx.send("❌ You can't rob bots.")
+    
+    t_id = str(target.id)
+    a_id = str(ctx.author.id)
+    t_bal = await db.get_balance(t_id)
+    
+    if t_bal < 1000:
+        return await ctx.send(f"❌ **{target.display_name}** is too poor to be worth robbing.")
+    
+    # Target Shield check
+    target_inventory = await db.get_inventory(t_id)
+    if "Shield" in target_inventory and random.random() < 0.3:
+        return await ctx.send(f"🛡️ **{target.display_name}** blocked your robbery with their **Shield**!")
+
+    # Attacker Thief Kit check
+    attacker_inventory = await db.get_inventory(a_id)
+    success_chance = 0.4 + (0.1 if "Thief Kit" in attacker_inventory else 0)
+        
+    success = random.random() < success_chance
+    
+    # Quest progress
+    await db.update_quest_progress(a_id, "steal")
+
+    if success:
+        stolen = random.randint(int(t_bal * 0.1), int(t_bal * 0.4))
+        await db.update_balance(t_id, -stolen)
+        await db.update_balance(a_id, stolen)
+        await ctx.send(f"💸 You successfully robbed **{target.display_name}** and took **{stolen:,}** {CURRENCY_NAME}!")
+    else:
+        fine = random.randint(1000, 5000)
+        await db.update_balance(a_id, -fine)
+        await ctx.send(f"🚔 You were caught robbing **{target.display_name}** and paid a **{fine:,}** fine to the police!")
+
+
+# ── SOCIAL ACTIONS ─────────────────────────────
+
+@bot.command(name="punch")
+async def punch_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🤜 {ctx.author.mention} punched {target.mention}!", color=0xE74C3C)
+    await ctx.send(embed=embed)
+
+@bot.command(name="hug")
+async def hug_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🫂 {ctx.author.mention} gave {target.mention} a warm hug!", color=0x3498DB)
+    await ctx.send(embed=embed)
+
+@bot.command(name="kiss")
+async def kiss_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"💋 {ctx.author.mention} kissed {target.mention}!", color=0xFF69B4)
+    await ctx.send(embed=embed)
+
+@bot.command(name="slap")
+async def slap_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"✋ {ctx.author.mention} slapped {target.mention}! Ouch.", color=0xE74C3C)
+    await ctx.send(embed=embed)
+
+@bot.command(name="pat")
+async def pat_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🤚 {ctx.author.mention} patted {target.mention}'s head.", color=0xF1C40F)
+    await ctx.send(embed=embed)
+
+@bot.command(name="poke")
+async def poke_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"👉 {ctx.author.mention} poked {target.mention}!", color=0x3498DB)
+    await ctx.send(embed=embed)
+
+@bot.command(name="bite")
+async def bite_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🦷 {ctx.author.mention} bit {target.mention}!", color=0xE74C3C)
+    await ctx.send(embed=embed)
+
+@bot.command(name="lick")
+async def lick_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"👅 {ctx.author.mention} licked {target.mention}!", color=0xFF69B4)
+    await ctx.send(embed=embed)
+
+@bot.command(name="cuddle")
+async def cuddle_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🫂 {ctx.author.mention} is cuddling with {target.mention}!", color=0x3498DB)
+    await ctx.send(embed=embed)
+
+@bot.command(name="wave")
+async def wave_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"👋 {ctx.author.mention} waved at {target.mention}!", color=0x3498DB)
+    await ctx.send(embed=embed)
+
+@bot.command(name="dance")
+async def dance_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"💃 {ctx.author.mention} is dancing with {target.mention}!", color=0x9B59B6)
+    await ctx.send(embed=embed)
+
+@bot.command(name="shoot")
+async def shoot_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🔫 {ctx.author.mention} shot {target.mention}! Oh no!", color=0x34495E)
+    await ctx.send(embed=embed)
+
+@bot.command(name="stab")
+async def stab_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🔪 {ctx.author.mention} stabbed {target.mention}!", color=0xE74C3C)
+    await ctx.send(embed=embed)
+
+@bot.command(name="tackle")
+async def tackle_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🏈 {ctx.author.mention} tackled {target.mention}!", color=0xE67E22)
+    await ctx.send(embed=embed)
+
+@bot.command(name="highfive", aliases=["h5"])
+async def highfive_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🙌 {ctx.author.mention} gave {target.mention} a high five!", color=0xF1C40F)
+    await ctx.send(embed=embed)
+
+@bot.command(name="feed")
+async def feed_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"🍔 {ctx.author.mention} is feeding {target.mention}!", color=0x2ECC71)
+    await ctx.send(embed=embed)
+
+@bot.command(name="carry")
+async def carry_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"💪 {ctx.author.mention} is carrying {target.mention}!", color=0x3498DB)
+    await ctx.send(embed=embed)
+
+@bot.command(name="bully")
+async def bully_cmd(ctx, target: discord.Member):
+    embed = discord.Embed(description=f"💢 {ctx.author.mention} is bullying {target.mention}! Mean...", color=0x34495E)
+    await ctx.send(embed=embed)
+
+# ── QUEST SYSTEM ─────────────────────────────
+
+QUEST_TEMPLATES = [
+    {"type": "gamble", "desc": "Gamble {goal} times in the casino", "reward": 5000, "goals": [5, 10, 15]},
+    {"type": "work", "desc": "Work {goal} times", "reward": 3000, "goals": [3, 5, 8]},
+    {"type": "crime", "desc": "Commit {goal} successful crimes", "reward": 8000, "goals": [3, 5, 10]},
+    {"type": "steal", "desc": "Attempt to steal {goal} times", "reward": 6000, "goals": [2, 4, 6]},
+    {"type": "daily", "desc": "Claim your daily reward", "reward": 2000, "goals": [1]}
+]
+
+async def generate_daily_quests(user_id: str):
+    import random
+    today = datetime.now().strftime("%Y-%m-%d")
+    selected = random.sample(QUEST_TEMPLATES, 3)
+    quests_list = []
+    for q in selected:
+        goal = random.choice(q["goals"])
+        quests_list.append({
+            "type": q["type"],
+            "desc": q["desc"].format(goal=goal),
+            "goal": goal,
+            "progress": 0,
+            "reward": q["reward"],
+            "claimed": False
+        })
+    quests = {"date": today, "list": quests_list}
+    await db.set_quests(user_id, quests)
+    return quests
+
+@bot.command(name="quests", aliases=["q", "tasks"])
+async def quests_cmd(ctx: commands.Context):
+    """View your daily quests and progress."""
+    user_id = str(ctx.author.id)
+    quests = await db.get_quests(user_id)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if not quests or quests.get("date") != today:
+        quests = await generate_daily_quests(user_id)
+
+    embed = discord.Embed(title=f"📋 Daily Quests | {ctx.author.name}", color=0x9B59B6)
+    embed.description = "Complete these tasks to earn extra rewards! Reset happens every 24h.\n\n"
+    
+    for q in quests["list"]:
+        status = "✅ Claimed" if q.get("claimed") else ("💎 Ready to claim!" if q["progress"] >= q["goal"] else f"🔄 {q['progress']}/{q['goal']}")
+        embed.add_field(
+            name=f"{q['desc']}",
+            value=f"**Status:** {status} | **Reward:** {q['reward']:,} {CURRENCY_NAME}",
+            inline=False
+        )
+    
+    embed.set_footer(text="Usage: !quest claim")
+    await ctx.send(embed=embed)
+
+@bot.command(name="quest")
+async def quest_claim_cmd(ctx: commands.Context, action: str = "claim"):
+    """Claim your quest rewards."""
+    if action != "claim": return
+    
+    user_id = str(ctx.author.id)
+    quests = await db.get_quests(user_id)
+    if not quests: return await ctx.send("❌ You don't have any quests.")
+
+    claimed_count = 0
+    total_reward = 0
+    for q in quests["list"]:
+        if q["progress"] >= q["goal"] and not q.get("claimed"):
+            q["claimed"] = True
+            total_reward += q["reward"]
+            claimed_count += 1
+    
+    if claimed_count == 0:
+        return await ctx.send("❌ No rewards to claim right now!")
+    
+    await db.set_quests(user_id, quests)
+    await db.update_balance(user_id, total_reward)
+    
+    await ctx.send(f"🎊 You claimed **{claimed_count}** quest rewards and earned **{total_reward:,}** {CURRENCY_NAME}!")
 
 if __name__ == "__main__":
     if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
