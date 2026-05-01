@@ -314,6 +314,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}ban <@user> [reason]` - Ban a member\n"
                 f"`{prefix}quarantine <@user>` - Send to quarantine manually\n"
                 f"`{prefix}setrole <@user> <role>` - Give/Take a role from user\n"
+                f"`{prefix}listroles` - See all manageable roles\n"
                 f"`{prefix}goodbye` - Send a final manual farewell"
             )
         elif cat == "security":
@@ -2061,6 +2062,32 @@ async def setrole_cmd(ctx: commands.Context, member: discord.Member, *, role: di
         await ctx.send("❌ Eu não tenho permissão para gerenciar este cargo (ele pode estar acima do meu topo).")
     except Exception as e:
         await ctx.send(f"❌ Ocorreu um erro: {e}")
+
+@bot.command(name="listroles")
+@commands.has_permissions(manage_roles=True)
+async def list_roles_cmd(ctx: commands.Context):
+    """List all roles and show which ones the bot can manage."""
+    bot_top_role = ctx.guild.me.top_role
+    manageable = []
+    unmanageable = []
+    
+    for role in sorted(ctx.guild.roles, key=lambda r: r.position, reverse=True):
+        if role.is_default(): continue
+        
+        if role < bot_top_role and not role.managed:
+            manageable.append(f"✅ {role.name}")
+        else:
+            reason = "(Acima do bot)" if role >= bot_top_role else "(Integração)"
+            unmanageable.append(f"❌ {role.name} {reason}")
+
+    embed = discord.Embed(title="🎭 Cargos do Servidor", color=0x3498DB)
+    if manageable:
+        embed.add_field(name="Pode Gerenciar", value="\n".join(manageable[:25]) or "Nenhum", inline=False)
+    if unmanageable:
+        embed.add_field(name="Não Pode Gerenciar", value="\n".join(unmanageable[:25]) or "Nenhum", inline=False)
+    
+    embed.set_footer(text=f"Total: {len(ctx.guild.roles)-1} cargos")
+    await ctx.send(embed=embed)
 
 @bot.command(name="setvouches")
 @commands.has_permissions(administrator=True)
