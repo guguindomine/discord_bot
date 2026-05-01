@@ -269,8 +269,7 @@ class HelpSelect(discord.ui.Select):
         if cat == "setup":
             embed.title = "⚙️ Setup & Configuration"
             embed.description = (
-                f"`{prefix}setrole <role>` - Set the auto-join role\n"
-                f"`{prefix}autorole <role>` - Alias for setrole\n"
+                f"`{prefix}autorole <role>` - Set the auto-join role\n"
                 f"`{prefix}setwelcomechannel <#ch>` - Set where greetings go\n"
                 f"`{prefix}setlogchannel <#ch>` - Set where logs go\n"
                 f"`{prefix}setwelcome <msg>` - Set the join message\n"
@@ -314,6 +313,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}kick <@user> [reason]` - Kick a member\n"
                 f"`{prefix}ban <@user> [reason]` - Ban a member\n"
                 f"`{prefix}quarantine <@user>` - Send to quarantine manually\n"
+                f"`{prefix}setrole <@user> <role>` - Give/Take a role from user\n"
                 f"`{prefix}goodbye` - Send a final manual farewell"
             )
         elif cat == "security":
@@ -336,8 +336,6 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
                 f"`{prefix}swearlog [@user]` - View infraction history/top\n"
                 f"`{prefix}vouches [@user]` - Check your vouch level\n"
-                f"`{prefix}addrank [@user] <lvl>` - Add to a user's level\n"
-                f"`{prefix}setrank [@user] <lvl>` - Set a user's vouch rank\n"
                 f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
@@ -1325,11 +1323,11 @@ async def set_color_cmd(ctx: commands.Context, hex_code: str):
     save_config(cfg)
     await ctx.send(f"✅ Embed color updated to **{hex_code}**!")
 
-@bot.command(name="setrole")
+@bot.command(name="autorole")
 @commands.has_permissions(administrator=True)
-async def set_role_cmd(ctx: commands.Context, *, role_name: str):
+async def set_autorole_cmd(ctx: commands.Context, *, role_name: str):
     """Set the auto-role name. Admin only.
-    Usage: !setrole RoleName
+    Usage: !autorole RoleName
     """
     # Verify the role exists
     role = parse_role_name(ctx.guild, role_name)
@@ -2048,35 +2046,21 @@ async def togglegame_cmd(ctx: commands.Context, game_id: str):
 
 # ── !setrank & !setvouches & !autorole ────────
 
-@bot.command(name="setrank")
-@commands.has_permissions(administrator=True)
-async def setrank_cmd(ctx: commands.Context, member: discord.Member, level: int):
-    """Set a member's rank/level manually. Vouches will be calculated."""
-    if level < 1:
-        await ctx.send("❌ Level must be 1 or higher.")
-        return
-        
-    vouches = (level - 1) * 5
-    await db.set_vouches(str(member.id), vouches)
-    
-    await ctx.send(f"✅ Set **{member.display_name}** to Level **{level}** ({vouches} vouches).")
-
-@bot.command(name="addrank")
-@commands.has_permissions(administrator=True)
-async def addrank_cmd(ctx: commands.Context, member: discord.Member, levels: int):
-    """Add levels to a member's rank manually."""
-    if levels < 1:
-        await ctx.send("❌ You must add at least 1 level.")
-        return
-        
-    current_vouches = await db.get_vouches(str(member.id))
-    current_level = (current_vouches // 5) + 1
-    
-    new_level = current_level + levels
-    new_vouches = (new_level - 1) * 5
-    
-    await db.set_vouches(str(member.id), new_vouches)
-    await ctx.send(f"✅ Added **{levels}** levels to **{member.display_name}**. They are now Level **{new_level}**.")
+@bot.command(name="setrole")
+@commands.has_permissions(manage_roles=True)
+async def setrole_cmd(ctx: commands.Context, member: discord.Member, *, role: discord.Role):
+    """Give or take a role from a user. Usage: !setrole @user RoleName"""
+    try:
+        if role in member.roles:
+            await member.remove_roles(role)
+            await ctx.send(f"✅ Removido o cargo **{role.name}** de {member.mention}")
+        else:
+            await member.add_roles(role)
+            await ctx.send(f"✅ Adicionado o cargo **{role.name}** para {member.mention}")
+    except discord.Forbidden:
+        await ctx.send("❌ Eu não tenho permissão para gerenciar este cargo (ele pode estar acima do meu topo).")
+    except Exception as e:
+        await ctx.send(f"❌ Ocorreu um erro: {e}")
 
 @bot.command(name="setvouches")
 @commands.has_permissions(administrator=True)
@@ -2091,11 +2075,6 @@ async def setvouches_cmd(ctx: commands.Context, member: discord.Member, vouches:
     level = (vouches // 5) + 1
     await ctx.send(f"✅ Set **{member.display_name}** to **{vouches}** vouches (Level {level}).")
 
-@bot.command(name="autorole")
-@commands.has_permissions(administrator=True)
-async def autorole_alias(ctx: commands.Context, *, role_name: str):
-    """Alias for !setrole"""
-    await set_role_cmd(ctx, role_name=role_name)
 
 # ── !add & !remove (Ticket Management) ────────
 
