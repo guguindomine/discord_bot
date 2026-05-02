@@ -1639,6 +1639,27 @@ async def set_welcome_cmd(ctx: commands.Context, *, message: str):
     await save_config_sync(cfg)
     await ctx.send(f"✅ Join message updated! Try `!testjoin` to see it.")
 
+# ── !set ───────────────────────────────────────
+
+@bot.group(name="set", invoke_without_command=True)
+@commands.has_permissions(administrator=True)
+async def set_cmd(ctx: commands.Context):
+    """Configuration commands for the bot."""
+    if ctx.invoked_subcommand is None:
+        await ctx.send(f"❓ Usage: `{PREFIX}set paradoxy <value>`")
+
+@set_cmd.command(name="paradoxy")
+@commands.has_permissions(administrator=True)
+async def set_paradoxy_cmd(ctx: commands.Context, *, value: str = None):
+    """Set the paradoxy configuration value. Admin only."""
+    if not value:
+        return await ctx.send(f"❓ Usage: `{PREFIX}set paradoxy <value>`")
+    
+    cfg = load_config()
+    cfg["PARADOXY_VALUE"] = value
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Paradoxy setting updated to: `{value}`")
+
 # ── !setgoodbye ──────────────────────────────
 
 @bot.group(name="setgoodbye", invoke_without_command=True)
@@ -3355,7 +3376,7 @@ async def bj_cmd(ctx: commands.Context, amount: str):
             return await ctx.send("❌ Please enter a valid bet amount or `all`.")
 
     if bet <= 0:
-        return await ctx.send("❌ Bet must be greater than zer✅")
+        return await ctx.send("❌ Bet must be greater than zero.")
     if bet > balance:
         return await ctx.send(f"❌ You do not have enough {CURRENCY_NAME}. Your wallet has {balance:,}.")
 
@@ -3464,7 +3485,7 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
         return await ctx.send("❌ Choose heads or tails.")
     
     msg = await ctx.send("🪙 **Flipping...**")
-    await asynciosleep(1.5)
+    await asyncio.sleep(1.5)
 
     inventory = await db.get_inventory(user_id)
     win_chance = await RiggedOdds.calculate_win_chance("cf", inventory)
