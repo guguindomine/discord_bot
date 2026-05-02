@@ -4085,20 +4085,24 @@ class HeistTargetView(discord.ui.View):
         super().__init__(timeout=60)
         self.ctx = ctx
         self.user_id = ctx.author.id
+        self.selection_made = False
 
     @discord.ui.button(label="Jewelry Store", style=discord.ButtonStyle.primary)
     async def jewelry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id: return
+        if interaction.user.id != self.user_id or self.selection_made: return
+        self.selection_made = True
         await self.choose_target(interaction, "jewelry")
 
     @discord.ui.button(label="Main Bank", style=discord.ButtonStyle.primary)
     async def bank(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id: return
+        if interaction.user.id != self.user_id or self.selection_made: return
+        self.selection_made = True
         await self.choose_target(interaction, "bank")
 
     @discord.ui.button(label="Armored Truck", style=discord.ButtonStyle.primary)
     async def truck(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id: return
+        if interaction.user.id != self.user_id or self.selection_made: return
+        self.selection_made = True
         await self.choose_target(interaction, "truck")
 
     async def choose_target(self, interaction: discord.Interaction, target: str):
@@ -4115,23 +4119,27 @@ class CrimeDifficultyView(discord.ui.View):
         self.target = target
         self.active_view = None
         self.is_over = False
+        self.selection_made = False
 
     @discord.ui.button(label="Easy", style=discord.ButtonStyle.success)
     async def easy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
+        if interaction.user.id != self.user_id or self.selection_made:
             return
+        self.selection_made = True
         await self.start_heist(interaction, "easy")
 
     @discord.ui.button(label="Normal", style=discord.ButtonStyle.primary)
     async def normal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
+        if interaction.user.id != self.user_id or self.selection_made:
             return
+        self.selection_made = True
         await self.start_heist(interaction, "normal")
 
     @discord.ui.button(label="Hard", style=discord.ButtonStyle.danger)
     async def hard(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
+        if interaction.user.id != self.user_id or self.selection_made:
             return
+        self.selection_made = True
         await self.start_heist(interaction, "hard")
 
     async def start_heist(self, interaction: discord.Interaction, difficulty: str):
@@ -4378,6 +4386,9 @@ async def heist_cmd(ctx: commands.Context):
         rem = (last_heist + timedelta(seconds=cd)) - datetime.now()
         return await ctx.send(f"⏳ Your heist crew is laying low. Try again in **{int(rem.total_seconds()//60)}m**.")
 
+    # Set cooldown IMMEDIATELY to prevent race conditions
+    await db.set_cooldown(user_id, "heist", datetime.now())
+
     msg = await ctx.send("🏦 **Preparing the heist equipment...**")
     await asyncio.sleep(2.0)
 
@@ -4385,7 +4396,6 @@ async def heist_cmd(ctx: commands.Context):
     embed.description = "Choose the target for your operation. Higher risk = higher reward!"
     view = HeistTargetView(ctx)
     await msg.edit(content=None, embed=embed, view=view)
-    await db.set_cooldown(user_id, "heist", datetime.now())
 
 @bot.command(name="resetcd")
 @commands.is_owner()
