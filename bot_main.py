@@ -479,7 +479,7 @@ class TicketControlView(discord.ui.View):
     async def close_ticket(self, interaction: discord.Interaction):
         await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
         import asyncio
-        await asynciosleep(5)
+        await asyncio.sleep(5)
         try:
             await interaction.channel.delete()
         except Exception as e:
@@ -1341,6 +1341,7 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 # ══════════════════════════════════════════════
 
 # ── !help ────────────────────────────────────
+bot.remove_command('help')
 
 @bot.command(name="help")
 async def help_cmd(ctx: commands.Context, *sub: str):
@@ -2464,6 +2465,35 @@ async def ban_cmd(ctx: commands.Context, member: discord.Member, *, reason: str 
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to ban that user.")
 
+# ── !setboostchannel ──────────────────────────
+
+@bot.command(name="setboostchannel")
+@commands.has_permissions(administrator=True)
+async def set_boost_channel(ctx: commands.Context, channel: discord.TextChannel):
+    """Set the channel for boost messages. Admin only."""
+    cfg = load_config()
+    cfg["BOOST_CHANNEL_ID"] = channel.id
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Boost messages will now be sent in {channel.mention}.")
+
+@bot.command(name="setboostrole")
+@commands.has_permissions(administrator=True)
+async def set_boost_role(ctx: commands.Context, *, role_name: str):
+    """Set the custom role given when a user boosts. Admin only."""
+    cfg = load_config()
+    cfg["BOOST_ROLE_NAME"] = role_name
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Users who boost will receive the role **{role_name}**.")
+
+@bot.command(name="setboostmessage")
+@commands.has_permissions(administrator=True)
+async def set_boost_message(ctx: commands.Context, *, message: str):
+    """Set custom boost message. Admin only."""
+    cfg = load_config()
+    cfg["BOOST_MESSAGE"] = message
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Boost message updated! Try `!testboost` to see it.")
+
 # ── !testboost / !setboost ────────────────────
 @bot.command(name="testboost", aliases=["setboost"])
 @commands.has_permissions(administrator=True)
@@ -3087,6 +3117,8 @@ async def on_command_error(ctx: commands.Context, error):
         await ctx.send(f"⚠️ Missing argument: `{error.param.name}`. Use `{PREFIX}help {ctx.command}` for usage.")
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("❌ Member not found. Make sure to mention them or use their exact name.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(f"❌ Bad argument: {error}. Please check your input.")
     elif isinstance(error, commands.CommandOnCooldown):
         retry = int(error.retry_after)
         minutes, seconds = divmod(retry, 60)
@@ -3538,7 +3570,7 @@ async def slots_cmd(ctx: commands.Context, bet: int):
     if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
     
     msg = await ctx.send("🎰 **Spinning...**")
-    await asynciosleep(1.5)
+    await asyncio.sleep(1.5)
     
     inventory = await db.get_inventory(user_id)
     win_chance = await RiggedOdds.calculate_win_chance("slots_normal", inventory)
@@ -3571,7 +3603,7 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
     win_chance = await RiggedOdds.calculate_win_chance("roulette_red", inventory)
     
     msg = await ctx.send("🎡 **Spinning...**")
-    await asynciosleep(2)
+    await asyncio.sleep(2)
     
     win = random.random() < win_chance
     reds = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
@@ -3970,7 +4002,7 @@ class PokerView(discord.ui.View):
         # Show initial analyzing message
         await interaction.response.send_message(embed=discord.Embed(title="🤔 Analyzing Your Hand...", description="⏳ Computing hand strength...", color=0x3498DB), ephemeral=True)
         
-        await asynciosleep(1.5)
+        await asyncio.sleep(1.5)
         
         # Show results
         result_embed = discord.Embed(title="🃏 Your Hand Analysis", color=0x9B59B6)
@@ -4031,7 +4063,7 @@ class PokerView(discord.ui.View):
         
         # Animate dealer thinking
         await interaction.channel.send("🤔 **The dealer is comparing hands...**")
-        await asynciosleep(2)
+        await asyncio.sleep(2)
         
         winners, hands = self.game.get_winners()
         
@@ -4385,7 +4417,7 @@ class BlackjackView(discord.ui.View):
         else:
             await interaction.edit_original_response(content="⏳ **Dealer is thinking...**", view=None)
 
-        await asynciosleep(1.5)
+        await asyncio.sleep(1.5)
 
         while self.get_score(self.dealer_hand) < 17:
             self.dealer_hand.append(self.deck.pop())
@@ -4549,7 +4581,7 @@ class CrimeDifficultyView(discord.ui.View):
         msg = await interaction.original_response()
         
         # Wait for memorization
-        await asynciosleep(5)
+        await asyncio.sleep(5)
         
         if self.is_over: return # In case they somehow finished or cancelled
         
@@ -4715,6 +4747,106 @@ class TeamHeistView(discord.ui.View):
         embed = interaction.message.embeds[0]
         embed.description = f"**Current Team:**\n" + "\n".join([f"<@{m}>" for m in self.members]) + f"\n\n*Starting in 30s...*"
         await interaction.message.edit(embed=embed)
+
+@bot.command(name="crime")
+async def crime_cmd(ctx: commands.Context):
+    """Commit a quick random crime for fast cash."""
+    user_id = str(ctx.author.id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    if jail_end and datetime.now() < jail_end:
+        rem = jail_end - datetime.now()
+        return await ctx.send(f"🔒 You are in **Jail**! Release in **{int(rem.total_seconds()//60)}m**.")
+
+    last_crime = await db.get_cooldown(user_id, "crime")
+    cd = COMMAND_COOLDOWNS["crime"]
+    if last_crime and datetime.now() < last_crime + timedelta(seconds=cd):
+        rem = (last_crime + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Wait **{int(rem.total_seconds())}s**.")
+
+    scenarios = [
+        {"name": "Pickpocketing", "msg": "You swiped a wallet!", "win_range": (2000, 5000), "fail_msg": "Caught!", "fine_range": (1000, 3000), "chance": 0.65},
+        {"name": "Vandalism", "msg": "Spray-painted a car!", "win_range": (3000, 7000), "fail_msg": "Alarm!", "fine_range": (2000, 4000), "chance": 0.55},
+        {"name": "Hacking", "msg": "Bypassed an ATM!", "win_range": (8000, 15000), "fail_msg": "Tracked!", "fine_range": (4000, 8000), "chance": 0.45}
+    ]
+    
+    msg = await ctx.send("🕵️ **Planning crime...**")
+    await asyncio.sleep(1.5)
+    
+    crime = random.choice(scenarios)
+    inventory = await db.get_inventory(user_id)
+    chance_mod = 0.15 if "Crime Mask" in inventory else 0
+    
+    success = random.random() < (crime["chance"] + chance_mod)
+    await db.set_cooldown(user_id, "crime", datetime.now())
+    await db.update_quest_progress(user_id, "crime")
+
+    if success:
+        amount = random.randint(*crime["win_range"])
+        await db.update_balance(user_id, amount)
+        embed = discord.Embed(title=f"✅ Crime: {crime['name']}", description=f"{crime['msg']}\n\nYou earned **{amount:,}** {CURRENCY_NAME}!", color=0x2ECC71)
+    else:
+        loss = random.randint(*crime["fine_range"])
+        if "Crime Mask" in inventory: loss = int(loss * 0.7)
+        await db.update_balance(user_id, -loss)
+        embed = discord.Embed(title=f"🚨 Busted: {crime['name']}", description=f"{crime['fail_msg']}\n\nYou were fined **{loss:,}** {CURRENCY_NAME}!", color=0xE74C3C)
+    
+    await msg.edit(content=None, embed=embed)
+
+@bot.command(name="steal")
+async def steal_cmd(ctx: commands.Context, target: discord.Member):
+    """Attempt to rob another user's wallet."""
+    if target.id == ctx.author.id: return await ctx.send("❌ Can't rob yourself.")
+    if target.bot: return await ctx.send("❌ Can't rob bots.")
+    
+    t_id = str(target.id)
+    a_id = str(ctx.author.id)
+    t_bal = await db.get_balance(t_id)
+    
+    if t_bal < 5000: return await ctx.send(f"❌ {target.display_name} is too poor.")
+
+    last_steal = await db.get_cooldown(a_id, "steal")
+    cd = COMMAND_COOLDOWNS["steal"]
+    if last_steal and datetime.now() < last_steal + timedelta(seconds=cd):
+        rem = (last_steal + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Wait **{int(rem.total_seconds()//60)}m**.")
+
+    t_inv = await db.get_inventory(t_id)
+    if "Shield" in t_inv and random.random() < 0.4:
+        return await ctx.send(f"🛡️ **{target.display_name}**'s **Shield** blocked you!")
+
+    a_inv = await db.get_inventory(a_id)
+    success_chance = 0.35 + (0.12 if "Thief Kit" in a_inv else 0)
+    
+    success = random.random() < success_chance
+    await db.set_cooldown(a_id, "steal", datetime.now())
+    await db.update_quest_progress(a_id, "steal")
+
+    if success:
+        stolen = random.randint(int(t_bal * 0.1), int(t_bal * 0.3))
+        await db.update_balance(t_id, -stolen)
+        await db.update_balance(a_id, stolen)
+        await ctx.send(f"💸 You robbed **{target.display_name}** for **{stolen:,}** {CURRENCY_NAME}!")
+    else:
+        fine = random.randint(2000, 6000)
+        await db.update_balance(a_id, -fine)
+        await ctx.send(f"🚨 Caught! paid **{fine:,}** fine.")
+
+@bot.command(name="bail")
+async def bail_cmd(ctx: commands.Context):
+    """Pay bail to get out of jail early."""
+    user_id = str(ctx.author.id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    if not jail_end or datetime.now() >= jail_end: return await ctx.send("❌ Not in jail.")
+    
+    rem = jail_end - datetime.now()
+    cost = max(1, int(rem.total_seconds() / 60)) * 1000
+    
+    bal = await db.get_balance(user_id)
+    if bal < cost: return await ctx.send(f"❌ Bail costs **{cost:,}**. You have **{bal:,}**.")
+    
+    await db.update_balance(user_id, -cost)
+    await db.set_cooldown(user_id, "jail", datetime.now())
+    await ctx.send(f"✅ Paid **{cost:,}** bail and released!")
 
 @bot.command(name="heist")
 async def heist_cmd(ctx: commands.Context):
