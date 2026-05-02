@@ -618,7 +618,10 @@ class HelpSelect(discord.ui.Select):
             embed.description = (
                 f"`{prefix}testboost` - Simulate a boost event\n"
                 f"`{prefix}addboostselectrole <role>` - Add role to selector\n"
-                f"`{prefix}removeboostselectrole <role>` - Remove from selector"
+                f"`{prefix}removeboostselectrole <role>` - Remove from selector\n"
+                f"`{prefix}setboostchannel <#ch>` - Set where boost messages go\n"
+                f"`{prefix}setboostrole <role>` - Set auto-assigned boost role\n"
+                f"`{prefix}setboostmessage <msg>` - Set custom boost message"
             )
         elif cat == "mod":
             embed.title = "🔨 Advanced Moderation"
