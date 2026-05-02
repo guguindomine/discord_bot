@@ -660,7 +660,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
-                f"`{prefix}help paradoxy` - Open this menu"
+                f"`{prefix}help paradox` - Open this menu"
             )
         elif cat == "economy":
             embed.title = "🪙 Paradoxy Economy"
@@ -1361,8 +1361,8 @@ async def help_cmd(ctx: commands.Context, *sub: str):
         except discord.Forbidden:
             await ctx.send("❌ I can't DM you. Please enable DMs from server members.")
         return
-    if sub_text not in {"paradoxy", ""}:
-        await ctx.send(f"❓ Type `{PREFIX}help paradoxy` to open my interactive menu!")
+    if sub_text not in {"paradox", ""}:
+        await ctx.send(f"❓ Type `{PREFIX}help paradox` to open my interactive menu!")
         return
 
     embed = discord.Embed(
@@ -3517,7 +3517,7 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
     msg = await ctx.send("🪙 **Flipping...**")
     for _ in range(2):
         await asyncio.sleep(0.8)
-        await msg.edit(content="🥮 **Flipping...** (Tails)")
+        await msg.edit(content="📀 **Flipping...** (Tails)")
         await asyncio.sleep(0.8)
         await msg.edit(content="🪙 **Flipping...** (Heads)")
     await asyncio.sleep(0.8)
