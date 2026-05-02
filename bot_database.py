@@ -165,6 +165,35 @@ class BotDatabase:
             results.append(doc)
         return results
 
+    # ── LEVELING ─────────────────────────────
+    async def get_xp(self, user_id: str) -> int:
+        user = await self.db.users.find_one({"_id": user_id})
+        return user.get("xp", 0) if user else 0
+
+    async def add_xp(self, user_id: str, amount: int) -> dict:
+        """Add XP and return the new document."""
+        return await self.db.users.find_one_and_update(
+            {"_id": user_id}, {"$inc": {"xp": amount}},
+            upsert=True, return_document=ReturnDocument.AFTER)
+
+    async def set_xp(self, user_id: str, amount: int):
+        await self.db.users.update_one({"_id": user_id}, {"$set": {"xp": amount}}, upsert=True)
+
+    async def get_level(self, user_id: str) -> int:
+        user = await self.db.users.find_one({"_id": user_id})
+        return user.get("level", 0) if user else 0
+
+    async def set_level(self, user_id: str, level: int):
+        await self.db.users.update_one({"_id": user_id}, {"$set": {"level": level}}, upsert=True)
+
+    async def get_level_leaderboard(self, limit: int = 10) -> list:
+        """Return top users sorted by XP."""
+        cursor = self.db.users.find({"xp": {"$gt": 0}}).sort("xp", -1).limit(limit)
+        results = []
+        async for doc in cursor:
+            results.append(doc)
+        return results
+
     # ── ALL USERS ────────────────────────────
     async def get_all_users(self) -> list:
         if self.db is None:
@@ -185,6 +214,20 @@ class BotDatabase:
 
     async def clear_loan(self, user_id: str):
         await self.db.users.update_one({"_id": user_id}, {"$unset": {"loan": ""}})
+
+    # ── GLOBAL CONFIG ────────────────────────
+    async def get_config(self) -> dict:
+        if self.db is None: return {}
+        doc = await self.db.settings.find_one({"_id": "global"})
+        return doc.get("data", {}) if doc else {}
+
+    async def update_config(self, config_data: dict):
+        if self.db is None: return
+        await self.db.settings.update_one(
+            {"_id": "global"},
+            {"$set": {"data": config_data}},
+            upsert=True
+        )
 
 
 db = BotDatabase()

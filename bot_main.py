@@ -47,6 +47,15 @@ import os
 import re
 from bot_database import db
 
+async def save_config_sync(cfg: dict):
+    """Save config to both config.json and MongoDB."""
+    save_config(cfg)
+    if db.db is not None:
+        try:
+            await db.update_config(cfg)
+        except Exception as e:
+            print(f"  [ERROR] Failed to sync config to DB: {e}")
+
 # ── SECURITY CONSTANTS ──
 SCAM_LINKS = [
     "discord.gift/", "steamcommunity.com/gift", "nitro-", "free-nitro", 
@@ -164,6 +173,154 @@ class RiggedOdds:
         final_chance = chance + min(luck_buff, 0.20)
         return final_chance
 
+# ── LEVELING SETTINGS ──
+LEVEL_ROLES = {
+    0: {"name": "Peasant", "color": 0x808080},
+    5: {"name": "Squire", "color": 0x556B2F},
+    10: {"name": "Knight", "color": 0x4682B4},
+    15: {"name": "Baron", "color": 0x8A2BE2},
+    20: {"name": "Viscount", "color": 0x9932CC},
+    25: {"name": "Count", "color": 0xBA55D3},
+    30: {"name": "Marquis", "color": 0xDA70D6},
+    35: {"name": "Duke", "color": 0xC71585},
+    40: {"name": "Grand Duke", "color": 0xFF1493},
+    45: {"name": "Prince", "color": 0xFF69B4},
+    50: {"name": "Archduke", "color": 0xFFD700},
+    55: {"name": "Viceroy", "color": 0xFFA500},
+    60: {"name": "Governor", "color": 0xFF8C00},
+    65: {"name": "High Lord", "color": 0xFF4500},
+    70: {"name": "Chancellor", "color": 0xFF0000},
+    75: {"name": "Royal Advisor", "color": 0xB22222},
+    80: {"name": "Guardian of the Realm", "color": 0x8B0000},
+    85: {"name": "Hero of Paradox", "color": 0x00FFFF},
+    90: {"name": "Legendary Sovereign", "color": 0x00BFFF},
+    95: {"name": "Celestial Emperor", "color": 0x1E90FF},
+    100: {"name": "Paradox Overlord", "color": 0xFFFFFF}
+}
+
+def get_xp_for_level(level: int) -> int:
+    """XP needed to reach the NEXT level from current."""
+    if level < 0: return 0
+    return 5 * (level ** 2) + 50 * level + 100
+
+def get_level_from_xp(total_xp: int) -> int:
+    """Calculate current level from total XP."""
+    level = 0
+    remaining_xp = total_xp
+    while remaining_xp >= get_xp_for_level(level):
+        remaining_xp -= get_xp_for_level(level)
+        level += 1
+    return level
+
+def get_xp_progress(total_xp: int) -> tuple:
+    """Returns (current_level, xp_into_level, xp_needed_for_next)."""
+    level = 0
+    remaining_xp = total_xp
+    while remaining_xp >= get_xp_for_level(level):
+        remaining_xp -= get_xp_for_level(level)
+        level += 1
+    return level, remaining_xp, get_xp_for_level(level)
+
+@tasks.loop(minutes=1)
+async def voice_xp_task():
+    """Give 6 XP per minute to active users in voice channels."""
+    for guild in bot.guilds:
+        for vc in guild.voice_channels:
+            if vc == guild.afk_channel:
+                continue
+            
+            # Filter real members (not bots, not deafened/muted)
+            active_members = [m for m in vc.members if not m.bot and not (m.voice.self_deaf or m.voice.deaf)]
+            
+            for member in active_members:
+                await add_xp_logic(member, amount=6, source="voice")
+
+async def add_xp_logic(member: discord.Member, amount: int, source: str = "message", channel = None):
+    """Core logic for adding XP, checking cooldowns, and handling level ups."""
+    user_id = str(member.id)
+    
+    # ── Cooldown Check for Messages ──
+    if source == "message":
+        last_xp = await db.get_cooldown(user_id, "xp_cooldown")
+        if last_xp and datetime.now() < last_xp + timedelta(minutes=1):
+            return
+        await db.set_cooldown(user_id, "xp_cooldown", datetime.now())
+
+    # ── Update XP in Database ──
+    new_doc = await db.add_xp(user_id, amount)
+    total_xp = new_doc.get("xp", 0)
+    old_level = new_doc.get("level", 0)
+    
+    # ── Calculate New Level ──
+    new_level = get_level_from_xp(total_xp)
+    
+    if new_level > old_level:
+        await db.set_level(user_id, new_level)
+        await handle_level_up(member, new_level, channel)
+
+async def handle_level_up(member: discord.Member, level: int, channel = None):
+    """Assign roles and notify the user on level up."""
+    # 1. Determine Role
+    role_to_give = None
+    role_info = None
+    
+    # Find highest role reward for this level
+    for req_level in sorted(LEVEL_ROLES.keys(), reverse=True):
+        if level >= req_level:
+            role_info = LEVEL_ROLES[req_level]
+            break
+            
+    if role_info:
+        role_name = role_info["name"]
+        role_to_give = discord.utils.get(member.guild.roles, name=role_name)
+        
+        # 2. Auto-Create Role if Missing
+        if not role_to_give:
+            try:
+                role_to_give = await member.guild.create_role(
+                    name=role_name,
+                    color=discord.Color(role_info["color"]),
+                    hoist=True,
+                    reason=f"Level {level} Kingdom Reward"
+                )
+                # Sort roles? (Simplified: Higher level roles should be higher)
+                # We can't easily sort without potential permission issues, 
+                # but let's try to put it below the bot's highest role.
+            except discord.Forbidden:
+                pass
+        
+        # 3. Assign Role and Remove Old Ones
+        if role_to_give:
+            try:
+                rank_names = [r["name"] for r in LEVEL_ROLES.values()]
+                to_remove = [r for r in member.roles if r.name in rank_names and r.id != role_to_give.id]
+                if to_remove:
+                    await member.remove_roles(*to_remove)
+                await member.add_roles(role_to_give)
+            except:
+                pass
+
+    # 4. Notify User
+    embed = discord.Embed(
+        title="🎊 LEVEL UP! 🎊",
+        description=f"Congratulations {member.mention}!\nYou've reached **Level {level}**!",
+        color=role_info["color"] if role_info else 0x9B59B6,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    if role_to_give:
+        embed.add_field(name="New Rank", value=f"🛡️ **{role_to_give.name}**")
+    
+    embed.set_footer(text="Paradox Kingdom 💜")
+    
+    if channel:
+        await channel.send(content=member.mention, embed=embed)
+    else:
+        # Fallback to system channel or first available
+        target = member.guild.system_channel or member.guild.text_channels[0]
+        try: await target.send(content=member.mention, embed=embed)
+        except: pass
+
 # Dynamic interest rate tier probabilities:
 #  80% → normal  (0.1% – 1.3%)
 #  20% → negative (-1% – 0%)
@@ -180,6 +337,25 @@ async def apply_interest_task():
     multiplier = 1 + rate / 100
     await db.apply_bank_interest(multiplier)
     print(f"  [ECONOMY] Hourly bank interest applied: {rate:.2f}% ({tier})")
+
+@tasks.loop(hours=24)
+async def check_loans_task():
+    """Check for overdue loans and apply penalties."""
+    users = await db.get_all_users()
+    now = datetime.now()
+    for user_doc in users:
+        loan = user_doc.get("loan")
+        if not loan or loan.get("paid", False): continue
+        
+        due_date = datetime.strptime(loan["due_date"], "%Y-%m-%d %H:%M:%S")
+        if now > due_date:
+            # Overdue!
+            user_id = user_doc["_id"]
+            amount = loan["amount"]
+            penalty = int(amount * 0.1) # 10% penalty
+            await db.update_balance(user_id, -(amount + penalty))
+            await db.clear_loan(user_id)
+            print(f"  [ECONOMY] Loan overdue for {user_id}. Penalty applied.")
 
 
 # ══════════════════════════════════════════════
@@ -370,7 +546,8 @@ class HelpSelect(discord.ui.Select):
             discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Cleanup", emoji="🔨", value="mod"),
             discord.SelectOption(label="Security & Filter", description="Anti-Scam, Quarantine & Swear Filter", emoji="🛡️", value="security"),
             discord.SelectOption(label="General & Stats", description="Polls, Info & Server data", emoji="📊", value="general"),
-            discord.SelectOption(label="Economy & Casino", description="Gambling, Bank & Paradoxals", emoji="🪙", value="economy")
+            discord.SelectOption(label="Economy & Casino", description="Gambling, Bank & Paradoxals", emoji="🪙", value="economy"),
+            discord.SelectOption(label="Leveling & Ranks", description="XP, Levels & Kingdom Roles", emoji="🏆", value="leveling")
         ]
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
@@ -387,7 +564,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setwelcomechannel <#ch>` - Set where greetings go\n"
                 f"`{prefix}setlogchannel <#ch>` - Set where logs go\n"
                 f"`{prefix}setwelcome <msg>` - Set the join message\n"
-                f"`{prefix}setgoodbye <msg>` - Set the leave message\n"
+                f"`{prefix}setgoodbye <msg/channel>` - Set leave message or channel\n"
                 f"`{prefix}setimg <welcome/goodbye> <url>` - Set banners\n"
                 f"`{prefix}setcolor <hex>` - Set embed colors\n"
                 f"`{prefix}togglewelcome` - Enable/Disable greetings\n"
@@ -488,6 +665,19 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}bank deposit/withdraw <amount>` - Bank (0.1–1.3% hourly, 20% negative)\n"
                 f"`{prefix}loan <amount>` - Take a loan (max 300k, pay back in 24h)\n"
                 f"`{prefix}payloan` - Pay off your loan"
+            )
+        elif cat == "leveling":
+            embed.title = "🏆 Leveling & Kingdom Ranks"
+            embed.description = (
+                f"`{prefix}level [@user]` - Check level and XP progress\n"
+                f"`{prefix}rank` - Global XP leaderboard\n"
+                f"`{prefix}setlevel <@user> <level>` - Set user level (Admin)\n"
+                f"`{prefix}setxp <@user> <xp>` - Set user XP (Admin)\n\n"
+                f"**XP Gains:**\n"
+                f"💬 Messages: 20-30 XP (1m cooldown)\n"
+                f"🎙️ Voice: 6 XP / minute\n\n"
+                f"**Kingdom Ranks:**\n"
+                f"Roles are auto-created every 5 levels up to Level 100!"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -663,6 +853,8 @@ async def on_ready():
         apply_interest_task.start()
     if not check_loans_task.is_running():
         check_loans_task.start()
+    if not voice_xp_task.is_running():
+        voice_xp_task.start()
 
     print("═" * 50)
     print(f"  ✅  Paradox Bot is ONLINE!")
@@ -701,6 +893,9 @@ async def on_member_join(member: discord.Member):
         print(f"  [WARN] Role '{role_name}' not found in {member.guild.name}. Create it first!")
 
     # ── Welcome message in channel ──
+    if not cfg.get("WELCOME_ENABLED", True):
+        return
+
     channel_id = cfg.get("WELCOME_CHANNEL_ID")
     if channel_id:
         channel = bot.get_channel(int(channel_id))
@@ -749,6 +944,8 @@ async def on_member_join(member: discord.Member):
 async def on_member_remove(member: discord.Member):
     """Send a goodbye message when someone leaves."""
     cfg = load_config()
+    if not cfg.get("WELCOME_ENABLED", True):
+        return
 
     channel_id = cfg.get("GOODBYE_CHANNEL_ID") or cfg.get("WELCOME_CHANNEL_ID")
     if channel_id:
@@ -791,6 +988,10 @@ async def on_message(message: discord.Message):
         return
 
     cfg = load_config()
+
+    # ── Leveling XP ──
+    # 20-30 XP per message, handled by add_xp_logic (which has a 1-min cooldown)
+    await add_xp_logic(message.author, amount=random.randint(20, 30), source="message", channel=message.channel)
 
     # ── Boost Detection (System Message) ──
     if message.type in (
@@ -1266,7 +1467,7 @@ async def set_helper_text(ctx: commands.Context, game_code: str, *, questions_in
 
     games[game_code]["questions"] = new_questions
     cfg["HELPER_GAMES"] = games
-    save_config(cfg)
+    await save_config_sync(cfg)
     
     await ctx.send(f"✅ Questions updated for **{games[game_code]['name']}**! (Total: {len(new_questions)})")
 
@@ -1380,22 +1581,37 @@ async def set_welcome_cmd(ctx: commands.Context, *, message: str):
     """
     cfg = load_config()
     cfg["JOIN_MESSAGE"] = message
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Join message updated! Try `!testjoin` to see it.")
 
 
 # ── !setgoodbye ──────────────────────────────
 
-@bot.command(name="setgoodbye")
+@bot.group(name="setgoodbye", invoke_without_command=True)
 @commands.has_permissions(administrator=True)
-async def set_goodbye_cmd(ctx: commands.Context, *, message: str):
-    """Set a custom automated leave message. Admin only.
+async def set_goodbye_cmd(ctx: commands.Context, *, message: str = None):
+    """Set a custom automated leave message or channel. Admin only.
     Usage: !setgoodbye {member} has left the server.
     """
+    if ctx.invoked_subcommand is None:
+        if message:
+            cfg = load_config()
+            cfg["LEAVE_MESSAGE"] = message
+            await save_config_sync(cfg)
+            await ctx.send(f"✅ Leave message updated! Try `!testleave` to see it.")
+        else:
+            await ctx.send(f"❓ Usage: `{PREFIX}setgoodbye <message>` or `{PREFIX}setgoodbye channel <#ch>`")
+
+@set_goodbye_cmd.command(name="channel")
+@commands.has_permissions(administrator=True)
+async def set_goodbye_channel_cmd(ctx: commands.Context, channel: discord.TextChannel):
+    """Set the goodbye channel only. Admin only.
+    Usage: !setgoodbye channel #channel
+    """
     cfg = load_config()
-    cfg["LEAVE_MESSAGE"] = message
-    save_config(cfg)
-    await ctx.send(f"✅ Leave message updated! Try `!testleave` to see it.")
+    cfg["GOODBYE_CHANNEL_ID"] = channel.id
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Goodbye channel set to {channel.mention}")
 
 
 # ── !setimg ──────────────────────────────────
@@ -1426,7 +1642,7 @@ async def set_img_cmd(ctx: commands.Context, mode: str, url: str = None):
     cfg = load_config()
     key = "WELCOME_IMAGE_URL" if mode == "welcome" else "GOODBYE_IMAGE_URL"
     cfg[key] = img_url
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ {mode.capitalize()} image updated!")
 
 # ── !logwhitelist ────────────────────────────
@@ -1450,7 +1666,7 @@ async def log_whitelist_add(ctx: commands.Context, member: discord.Member):
         
     whitelist.append(member.id)
     cfg["LOG_WHITELISTED_USERS"] = whitelist
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ {member.mention} foi adicionado à whitelist de logs! Suas mensagens não serão mais registradas.")
 
 @log_whitelist_grp.command(name="remove")
@@ -1466,8 +1682,115 @@ async def log_whitelist_remove(ctx: commands.Context, member: discord.Member):
         
     whitelist.remove(member.id)
     cfg["LOG_WHITELISTED_USERS"] = whitelist
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ {member.mention} removido da whitelist de logs. Suas atividades voltarão a ser registradas.")
+
+# ── !level ───────────────────────────────────
+
+@bot.command(name="level", aliases=["lvl", "xp"])
+async def level_cmd(ctx: commands.Context, member: discord.Member = None):
+    """Check your current level and XP progress."""
+    member = member or ctx.author
+    user_id = str(member.id)
+    
+    total_xp = await db.get_xp(user_id)
+    lvl, cur_xp, next_xp = get_xp_progress(total_xp)
+    
+    # Progress Bar
+    bar_length = 20
+    filled = int((cur_xp / next_xp) * bar_length)
+    bar = "█" * filled + "░" * (bar_length - filled)
+    percent = int((cur_xp / next_xp) * 100)
+    
+    role_info = None
+    for req_level in sorted(LEVEL_ROLES.keys(), reverse=True):
+        if lvl >= req_level:
+            role_info = LEVEL_ROLES[req_level]
+            break
+
+    embed = discord.Embed(
+        title=f"🏆 {member.display_name}'s Level",
+        color=role_info["color"] if role_info else 0x9B59B6,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Level", value=f"✨ **{lvl}**", inline=True)
+    embed.add_field(name="Rank", value=f"🛡️ **{role_info['name'] if role_info else 'Novice'}**", inline=True)
+    embed.add_field(name="Progress", value=f"`{bar}` {percent}%\n({cur_xp:,} / {next_xp:,} XP)", inline=False)
+    embed.add_field(name="Total XP", value=f"💎 {total_xp:,} XP", inline=True)
+    
+    embed.set_footer(text="Paradox Kingdom 💜")
+    await ctx.send(embed=embed)
+
+# ── !rank ────────────────────────────────────
+
+@bot.command(name="rank", aliases=["leaderboard_xp", "top_xp"])
+async def rank_cmd(ctx: commands.Context):
+    """Show the top 10 users with the most XP."""
+    top_users = await db.get_level_leaderboard(10)
+    
+    if not top_users:
+        await ctx.send("ℹ️ No one has earned any XP yet!")
+        return
+
+    description = ""
+    for i, user_doc in enumerate(top_users):
+        user_id = int(user_doc["_id"])
+        total_xp = user_doc.get("xp", 0)
+        level = get_level_from_xp(total_xp)
+        
+        member = ctx.guild.get_member(user_id)
+        name = member.display_name if member else f"User ID: {user_id}"
+        
+        emoji = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"`#{i+1}`"
+        description += f"{emoji} **{name}** - Level {level} ({total_xp:,} XP)\n"
+
+    embed = discord.Embed(
+        title="🏆 Kingdom Leaderboard",
+        description=description,
+        color=0xF1C40F,
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text="Paradox Bot 💜 | Top XP Earners")
+    await ctx.send(embed=embed)
+
+# ── !setlevel ────────────────────────────────
+
+@bot.command(name="setlevel")
+@commands.has_permissions(administrator=True)
+async def set_level_cmd(ctx: commands.Context, member: discord.Member, level: int):
+    """Set a user's level. Admin only."""
+    if level < 0:
+        await ctx.send("❌ Level cannot be negative!")
+        return
+        
+    total_xp = get_total_xp_for_level(level)
+    user_id = str(member.id)
+    
+    await db.set_xp(user_id, total_xp)
+    await db.set_level(user_id, level)
+    
+    await handle_level_up(member, level, ctx.channel)
+    await ctx.send(f"✅ Set {member.mention}'s level to **{level}** (Total XP: {total_xp:,}).")
+
+# ── !setxp ───────────────────────────────────
+
+@bot.command(name="setxp")
+@commands.has_permissions(administrator=True)
+async def set_xp_cmd(ctx: commands.Context, member: discord.Member, xp: int):
+    """Set a user's total XP. Admin only."""
+    if xp < 0:
+        await ctx.send("❌ XP cannot be negative!")
+        return
+        
+    user_id = str(member.id)
+    level = get_level_from_xp(xp)
+    
+    await db.set_xp(user_id, xp)
+    await db.set_level(user_id, level)
+    
+    await handle_level_up(member, level, ctx.channel)
+    await ctx.send(f"✅ Set {member.mention}'s XP to **{xp:,}** (New Level: {level}).")
 
 @log_whitelist_grp.command(name="list")
 @commands.has_permissions(administrator=True)
@@ -1501,7 +1824,7 @@ async def set_color_cmd(ctx: commands.Context, hex_code: str):
 
     cfg = load_config()
     cfg["WELCOME_COLOR"] = hex_code
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Embed color updated to **{hex_code}**!")
 
 @bot.command(name="autorole")
@@ -1518,7 +1841,7 @@ async def set_autorole_cmd(ctx: commands.Context, *, role_name: str):
 
     cfg = load_config()
     cfg["AUTO_ROLE_NAME"] = role.name
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Auto-role set to **{role.name}**")
 
 
@@ -1533,7 +1856,7 @@ async def set_welcome_channel_cmd(ctx: commands.Context, channel: discord.TextCh
     cfg = load_config()
     cfg["WELCOME_CHANNEL_ID"] = channel.id
     cfg["GOODBYE_CHANNEL_ID"] = channel.id
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Welcome & goodbye channel set to {channel.mention}")
 
 
@@ -1547,8 +1870,20 @@ async def set_log_channel_cmd(ctx: commands.Context, channel: discord.TextChanne
     """
     cfg = load_config()
     cfg["LOG_CHANNEL_ID"] = channel.id
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Log channel set to {channel.mention}")
+
+@bot.command(name="togglewelcome")
+@commands.has_permissions(administrator=True)
+async def toggle_welcome_cmd(ctx: commands.Context):
+    """Enable or disable welcome messages. Admin only."""
+    cfg = load_config()
+    current = cfg.get("WELCOME_ENABLED", True)
+    cfg["WELCOME_ENABLED"] = not current
+    await save_config_sync(cfg)
+    
+    status = "🟢 **ENABLED**" if not current else "🔴 **DISABLED**"
+    await ctx.send(f"Welcome messages are now {status}")
 
 # ── !whitelist ───────────────────────────────
 
@@ -1571,7 +1906,7 @@ async def whitelist_add(ctx: commands.Context, member: discord.Member):
         
     whitelist.append(member.id)
     cfg["WHITELISTED_USERS"] = whitelist
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ {member.mention} has been added to the whitelist! They can now bypass the swear filter.")
 
 @whitelist_grp.command(name="remove")
@@ -1587,7 +1922,7 @@ async def whitelist_remove(ctx: commands.Context, member: discord.Member):
         
     whitelist.remove(member.id)
     cfg["WHITELISTED_USERS"] = whitelist
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ {member.mention} has been removed from the whitelist.")
 
 @whitelist_grp.command(name="list")
@@ -1625,7 +1960,7 @@ async def add_swear_cmd(ctx: commands.Context, *, word: str):
 
     swear_list.append(word_lower)
     cfg["SWEAR_WORDS"] = swear_list
-    save_config(cfg)
+    await save_config_sync(cfg)
 
     # Delete the command message so the swear word isn't visible
     try:
@@ -1720,7 +2055,7 @@ async def remove_swear_cmd(ctx: commands.Context, *, word: str):
         return
 
     cfg["SWEAR_WORDS"] = new_list
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Word removed from the swear filter. (Total: {len(new_list)} words)")
 
 
@@ -1733,7 +2068,7 @@ async def toggle_filter_cmd(ctx: commands.Context):
     cfg = load_config()
     current = cfg.get("SWEAR_FILTER_ENABLED", True)
     cfg["SWEAR_FILTER_ENABLED"] = not current
-    save_config(cfg)
+    await save_config_sync(cfg)
 
     status = "🟢 **ON**" if not current else "🔴 **OFF**"
     await ctx.send(f"Swear filter is now {status}")
@@ -1863,6 +2198,11 @@ async def add_scam_cmd(ctx, link: str):
         await ctx.send("⚠️ Este link já está na blacklist.")
         return
     SCAM_LINKS.append(link)
+    
+    cfg = load_config()
+    cfg["SCAM_LINKS"] = SCAM_LINKS
+    await save_config_sync(cfg)
+    
     await ctx.send(f"✅ Link `{link}` adicionado ao filtro de phishing!")
 
 @bot.command(name="clearscamlog")
@@ -1928,7 +2268,7 @@ async def set_threshold_cmd(ctx, system: str, key: str, value: int):
         await ctx.send("❌ Use `swear` ou `scam` como sistema.")
         return
         
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Limite de `{system}` para `{key}` atualizado para `{value}`!")
 
 # ── !botinfo ─────────────────────────────────
@@ -2049,7 +2389,7 @@ async def set_boost_channel(ctx: commands.Context, channel: discord.TextChannel)
     """Set the channel for boost messages. Admin only."""
     cfg = load_config()
     cfg["BOOST_CHANNEL_ID"] = channel.id
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Boost messages will now be sent in {channel.mention}.")
 
 # ── !setboostrole ─────────────────────────────
@@ -2060,7 +2400,7 @@ async def set_boost_role(ctx: commands.Context, *, role_name: str):
     """Set the custom role given when a user boosts. Admin only."""
     cfg = load_config()
     cfg["BOOST_ROLE_NAME"] = role_name
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Users who boost will receive the role **{role_name}**.")
 
 # ── !setboostmessage ──────────────────────────
@@ -2071,7 +2411,7 @@ async def set_boost_message(ctx: commands.Context, *, message: str):
     """Set custom boost message. Admin only."""
     cfg = load_config()
     cfg["BOOST_MESSAGE"] = message
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Boost message updated! Try `!testboost` to see it.")
 
 # ── !testboost ────────────────────────────────
@@ -2140,7 +2480,7 @@ async def set_ticket_category(ctx: commands.Context, category_id: str):
     """Set the category where new tickets are opened. Admin only."""
     cfg = load_config()
     cfg["TICKET_CATEGORY_ID"] = category_id
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ All new tickets will now be created in category ID: `{category_id}`")
 
 # ── !addboostselectrole ───────────────────────
@@ -2154,7 +2494,7 @@ async def add_boost_select_role(ctx: commands.Context, *, role_name: str):
     if role_name not in roles:
         roles.append(role_name)
         cfg["SELECTABLE_BOOST_ROLES"] = roles
-        save_config(cfg)
+        await save_config_sync(cfg)
         await ctx.send(f"✅ Role **{role_name}** added to the booster selector!")
     else:
         await ctx.send("⚠️ That role is already in the list.")
@@ -2170,7 +2510,7 @@ async def remove_boost_select_role(ctx: commands.Context, *, role_name: str):
     if role_name in roles:
         roles.remove(role_name)
         cfg["SELECTABLE_BOOST_ROLES"] = roles
-        save_config(cfg)
+        await save_config_sync(cfg)
         await ctx.send(f"✅ Role **{role_name}** removed from the booster selector.")
     else:
         await ctx.send("⚠️ That role was not in the list.")
@@ -2183,7 +2523,7 @@ async def set_vouch_channel(ctx: commands.Context, channel: discord.TextChannel)
     """Set the channel where ticket vouches are logged. Admin only."""
     cfg = load_config()
     cfg["VOUCH_CHANNEL_ID"] = channel.id
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Vouch logs will now be sent to {channel.mention}")
 
 # ── !vouches ──────────────────────────────────
@@ -2227,7 +2567,7 @@ async def addgame_cmd(ctx: commands.Context, game_id: str, emoji: str, *, name: 
         "active": True
     }
     cfg["HELPER_GAMES"] = games
-    save_config(cfg)
+    await save_config_sync(cfg)
     await ctx.send(f"✅ Game **{name}** ({game_id}) added and set to active!")
 
 @bot.command(name="togglegame")
@@ -2244,7 +2584,7 @@ async def togglegame_cmd(ctx: commands.Context, game_id: str):
     current_status = games[game_id].get("active", True)
     games[game_id]["active"] = not current_status
     cfg["HELPER_GAMES"] = games
-    save_config(cfg)
+    await save_config_sync(cfg)
     
     status_text = "🟢 Active" if not current_status else "🔴 Inactive"
     await ctx.send(f"✅ Game **{games[game_id]['name']}** is now {status_text}.")
@@ -2411,7 +2751,7 @@ async def migrate_cmd(ctx: commands.Context, arg: str = None):
             if "quarantine_roles" in user:
                 cfg["QUARANTINE_ROLES"][uid] = user["quarantine_roles"]
                 
-        save_config(cfg)
+        await save_config_sync(cfg)
         await ctx.send(f"✅ Export complete! Data for {len(all_users)} users has been saved to config.json.")
     else:
         await ctx.send("❓ Usage: `!migrate db` (Import to DB) or `!migrate json` (Export to JSON)")
