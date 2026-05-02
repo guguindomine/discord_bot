@@ -3135,14 +3135,21 @@ class PokerGame:
                 return False
         return True
 
-    def check_betting_complete(self):
-        active_players = [p for p in self.players.values() if not p['folded']]
-        if len(active_players) <= 1:
-            return True
-        for p in active_players:
-            if p['bet'] != self.current_bet:
-                return False
-        return True
+    async def send_hand_info(self, user_id):
+        player = self.players[user_id]
+        rank, desc = evaluate_poker_hand(player['cards'], self.community_cards)
+        user = await bot.fetch_user(int(user_id))
+        embed = discord.Embed(
+            title="🃏 Your Poker Hand",
+            description=f"Your cards: {player['cards'][0]} {player['cards'][1]}\n\n**Current Hand:** {desc}",
+            color=0x34495E
+        )
+        if self.community_cards:
+            embed.add_field(name="Community Cards", value=" ".join(self.community_cards), inline=False)
+        try:
+            await user.send(embed=embed)
+        except discord.Forbidden:
+            pass
 
     async def update_embed(self):
         embed = discord.Embed(title="🃏 Paradox Poker", color=0x34495E)
@@ -3218,7 +3225,6 @@ class PokerView(discord.ui.View):
                 await self.game.update_embed()
         else:
             await self.game.update_embed()
-        await self.game.send_hand_info(user_id)
 
 class RaiseModal(discord.ui.Modal, title="Raise Amount"):
     amount = discord.ui.TextInput(label="Amount to raise", placeholder="Enter amount", required=True)
@@ -3270,7 +3276,6 @@ class RaiseModal(discord.ui.Modal, title="Raise Amount"):
                 await self.game.update_embed()
         else:
             await self.game.update_embed()
-        await self.game.send_hand_info(user_id)
 
 @bot.group(name="poker", invoke_without_command=True)
 @commands.cooldown(1, 5, commands.BucketType.user)
@@ -3354,30 +3359,7 @@ async def poker_start_handler(ctx: commands.Context):
     if len(game.players) < 2:
         return await ctx.send("❌ Need at least 2 players to start.")
     if game.start_game():
-        for uid, p in game.players.items():
-            user = await bot.fetch_user(int(uid))
-            try:
-                embed = discord.Embed(
-                    title="🃏 Your Poker Cards",
-                    description=f"Your cards: {p['cards'][0]} {p['cards'][1]}",
-                    color=0x34495E
-                )
-                await user.send(embed=embed)
-            except discord.Forbidden:
-                pass
-        winner = game.get_winner()
-        if winner:
-            pot = game.pot
-            await db.update_balance(winner, pot)
-            embed = discord.Embed(
-                title="🃏 Poker Results",
-                description=f"Winner: <@{winner}>\nPot: {pot:,} {CURRENCY_NAME}",
-                color=0x2ECC71
-            )
-            await game.message.edit(embed=embed)
-        else:
-            await game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C))
-        del active_poker_games[channel_id]
+        await game.update_embed()
     else:
         await ctx.send("❌ Failed to start game.")
 
