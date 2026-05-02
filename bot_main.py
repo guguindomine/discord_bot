@@ -1646,19 +1646,17 @@ async def set_welcome_cmd(ctx: commands.Context, *, message: str):
 async def set_cmd(ctx: commands.Context):
     """Configuration commands for the bot."""
     if ctx.invoked_subcommand is None:
-        await ctx.send(f"❓ Usage: `{PREFIX}set paradoxy <value>`")
+        await ctx.send(f"❓ Usage: `{PREFIX}set paradoxy @user <amount>`")
 
 @set_cmd.command(name="paradoxy")
 @commands.has_permissions(administrator=True)
-async def set_paradoxy_cmd(ctx: commands.Context, *, value: str = None):
-    """Set the paradoxy configuration value. Admin only."""
-    if not value:
-        return await ctx.send(f"❓ Usage: `{PREFIX}set paradoxy <value>`")
+async def set_paradoxy_cmd(ctx: commands.Context, member: discord.Member = None, amount: int = None):
+    """Set a user's paradoxy (economy balance). Admin only."""
+    if member is None or amount is None:
+        return await ctx.send(f"❓ Usage: `{PREFIX}set paradoxy @user <amount>`")
     
-    cfg = load_config()
-    cfg["PARADOXY_VALUE"] = value
-    await save_config_sync(cfg)
-    await ctx.send(f"✅ Paradoxy setting updated to: `{value}`")
+    await db.db.users.update_one({"_id": str(member.id)}, {"$set": {"balance": amount}}, upsert=True)
+    await ctx.send(f"✅ Paradoxy setting updated to: {member.mention} {amount}")
 
 # ── !setgoodbye ──────────────────────────────
 
