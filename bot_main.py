@@ -4806,8 +4806,6 @@ async def send_social_embed(ctx, target, action):
 async def punch_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "punch")
 @bot.command(name="slap")
 async def slap_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "slap")
-@bot.command(name="kick")
-async def kick_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "kick")
 @bot.command(name="bite")
 async def bite_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "bite")
 @bot.command(name="bully")
