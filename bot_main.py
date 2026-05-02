@@ -203,6 +203,13 @@ def get_xp_for_level(level: int) -> int:
     if level < 0: return 0
     return 5 * (level ** 2) + 50 * level + 100
 
+def get_total_xp_for_level(level: int) -> int:
+    """Calculate total XP needed to reach a specific level."""
+    total = 0
+    for i in range(level):
+        total += get_xp_for_level(i)
+    return total
+
 def get_level_from_xp(total_xp: int) -> int:
     """Calculate current level from total XP."""
     level = 0
@@ -313,13 +320,22 @@ async def handle_level_up(member: discord.Member, level: int, channel = None):
     
     embed.set_footer(text="Paradox Kingdom 💜")
     
-    if channel:
-        await channel.send(content=member.mention, embed=embed)
-    else:
-        # Fallback to system channel or first available
-        target = member.guild.system_channel or member.guild.text_channels[0]
-        try: await target.send(content=member.mention, embed=embed)
-        except: pass
+    # 5. Send Notification
+    cfg = load_config()
+    lvl_channel_id = cfg.get("LEVEL_CHANNEL_ID")
+    target_channel = None
+    
+    if lvl_channel_id:
+        target_channel = member.guild.get_channel(int(lvl_channel_id))
+    
+    if not target_channel:
+        target_channel = channel or member.guild.system_channel or member.guild.text_channels[0]
+
+    if target_channel:
+        try:
+            await target_channel.send(content=member.mention, embed=embed)
+        except:
+            pass
 
 # Dynamic interest rate tier probabilities:
 #  80% → normal  (0.1% – 1.3%)
@@ -568,7 +584,8 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setimg <welcome/goodbye> <url>` - Set banners\n"
                 f"`{prefix}setcolor <hex>` - Set embed colors\n"
                 f"`{prefix}togglewelcome` - Enable/Disable greetings\n"
-                f"`{prefix}testjoin` / `{prefix}testleave` - Test greeting embeds"
+                f"`{prefix}testjoin` / `{prefix}testleave` - Test greeting embeds\n\n"
+                f"**Note:** All settings are automatically synced to MongoDB! 🔄"
             )
         elif cat == "tickets":
             embed.title = "🎟️ Tickets & Helper Applications"
@@ -672,12 +689,13 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}level [@user]` - Check level and XP progress\n"
                 f"`{prefix}rank` - Global XP leaderboard\n"
                 f"`{prefix}setlevel <@user> <level>` - Set user level (Admin)\n"
-                f"`{prefix}setxp <@user> <xp>` - Set user XP (Admin)\n\n"
-                f"**XP Gains:**\n"
-                f"💬 Messages: 20-30 XP (1m cooldown)\n"
-                f"🎙️ Voice: 6 XP / minute\n\n"
-                f"**Kingdom Ranks:**\n"
-                f"Roles are auto-created every 5 levels up to Level 100!"
+                f"`{prefix}setxp <@user> <xp>` - Set user XP (Admin)\n"
+                f"`{prefix}setlevelchannel <#ch>` - Set level-up channel (Admin)\n\n"
+                f"**📈 XP Generation:**\n"
+                f"💬 Messages: **20-30 XP** (1m cooldown)\n"
+                f"🎙️ Voice: **6 XP / minute**\n\n"
+                f"**🏰 Kingdom Ranks:**\n"
+                f"Unique tiered roles are auto-created and assigned every 5 levels (Level 5, 10, 15... up to 100)!"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -991,7 +1009,8 @@ async def on_message(message: discord.Message):
 
     # ── Leveling XP ──
     # 20-30 XP per message, handled by add_xp_logic (which has a 1-min cooldown)
-    await add_xp_logic(message.author, amount=random.randint(20, 30), source="message", channel=message.channel)
+    if not message.content.startswith(PREFIX):
+        await add_xp_logic(message.author, amount=random.randint(20, 30), source="message", channel=message.channel)
 
     # ── Boost Detection (System Message) ──
     if message.type in (
@@ -1792,6 +1811,15 @@ async def set_xp_cmd(ctx: commands.Context, member: discord.Member, xp: int):
     await handle_level_up(member, level, ctx.channel)
     await ctx.send(f"✅ Set {member.mention}'s XP to **{xp:,}** (New Level: {level}).")
 
+@bot.command(name="setlevelchannel")
+@commands.has_permissions(administrator=True)
+async def set_level_channel_cmd(ctx: commands.Context, channel: discord.TextChannel):
+    """Set the channel for level-up notifications. Admin only."""
+    cfg = load_config()
+    cfg["LEVEL_CHANNEL_ID"] = channel.id
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Level-up notifications will now be sent in {channel.mention}")
+
 @log_whitelist_grp.command(name="list")
 @commands.has_permissions(administrator=True)
 async def log_whitelist_list(ctx: commands.Context):
@@ -2381,46 +2409,14 @@ async def ban_cmd(ctx: commands.Context, member: discord.Member, *, reason: str 
         await ctx.send("❌ I don't have permission to ban that user.")
 
 
-# ── !setboostchannel ──────────────────────────
-
-@bot.command(name="setboostchannel")
+# ── !testboost / !setboost ────────────────────
+@bot.command(name="testboost", aliases=["setboost"])
 @commands.has_permissions(administrator=True)
-async def set_boost_channel(ctx: commands.Context, channel: discord.TextChannel):
-    """Set the channel for boost messages. Admin only."""
-    cfg = load_config()
-    cfg["BOOST_CHANNEL_ID"] = channel.id
-    await save_config_sync(cfg)
-    await ctx.send(f"✅ Boost messages will now be sent in {channel.mention}.")
-
-# ── !setboostrole ─────────────────────────────
-
-@bot.command(name="setboostrole")
-@commands.has_permissions(administrator=True)
-async def set_boost_role(ctx: commands.Context, *, role_name: str):
-    """Set the custom role given when a user boosts. Admin only."""
-    cfg = load_config()
-    cfg["BOOST_ROLE_NAME"] = role_name
-    await save_config_sync(cfg)
-    await ctx.send(f"✅ Users who boost will receive the role **{role_name}**.")
-
-# ── !setboostmessage ──────────────────────────
-
-@bot.command(name="setboostmessage")
-@commands.has_permissions(administrator=True)
-async def set_boost_message(ctx: commands.Context, *, message: str):
-    """Set custom boost message. Admin only."""
-    cfg = load_config()
-    cfg["BOOST_MESSAGE"] = message
-    await save_config_sync(cfg)
-    await ctx.send(f"✅ Boost message updated! Try `!testboost` to see it.")
-
-# ── !testboost ────────────────────────────────
-
-@bot.command(name="testboost")
-@commands.has_permissions(administrator=True)
-async def test_boost(ctx: commands.Context):
-    """Simulate a server boost to test the message and role. Admin only."""
-    member = ctx.author
+async def test_boost(ctx: commands.Context, member: discord.Member = None):
+    """Simulate a server boost for yourself or another member. Admin only.
+    Usage: !testboost [@user] or !setboost @user
+    """
+    member = member or ctx.author
     cfg = load_config()
     
     boost_channel_id = cfg.get("BOOST_CHANNEL_ID")
@@ -2463,12 +2459,12 @@ async def test_boost(ctx: commands.Context):
         if role:
             try:
                 await member.add_roles(role)
-                await ctx.send(f"✅ Assigned **{role.name}** to you!")
+                await ctx.send(f"✅ Assigned **{role.name}** to **{member.display_name}**!")
             except discord.Forbidden:
                 await ctx.send(f"❌ Failed to assign role (Permissions)")
 
         if channel != ctx.channel:
-            await ctx.send(f"✅ Test boost complete! Check {channel.mention}")
+            await ctx.send(f"✅ Test boost for {member.display_name} complete! Check {channel.mention}")
     else:
         await ctx.send("❌ Boost channel not found! Set it with `!setboostchannel #channel`.")
 
