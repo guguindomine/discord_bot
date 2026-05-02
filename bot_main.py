@@ -3198,33 +3198,21 @@ class PokerView(discord.ui.View):
             await interaction.response.send_message(f"{interaction.user.mention} folded.", ephemeral=False)
         elif action == 'call':
             call_amount = self.game.current_bet - player['bet']
+            if call_amount < 0:
+                call_amount = 0
             if call_amount > player['chips']:
                 return await interaction.response.send_message("Not enough chips!", ephemeral=True)
-            player['bet'] += call_amount
-            player['chips'] -= call_amount
-            self.game.pot += call_amount
-            await interaction.response.send_message(f"{interaction.user.mention} called {call_amount:,} {CURRENCY_NAME}.", ephemeral=False)
+            if call_amount > 0:
+                player['bet'] += call_amount
+                player['chips'] -= call_amount
+                self.game.pot += call_amount
+                await interaction.response.send_message(f"{interaction.user.mention} called {call_amount:,} {CURRENCY_NAME}.", ephemeral=False)
+            else:
+                await interaction.response.send_message(f"{interaction.user.mention} checked.", ephemeral=False)
         
         self.game.next_player()
-        if self.game.check_betting_complete():
-            self.game.advance_round()
-            if self.game.round == 'showdown':
-                winners, hands = self.game.get_winners()
-                if winners:
-                    pot_split = self.game.pot // len(winners)
-                    for winner in winners:
-                        await db.update_balance(winner, pot_split)
-                    winner_names = [f"<@{w}>" for w in winners]
-                    embed = discord.Embed(title="🃏 Poker Results", description=f"Winners: {', '.join(winner_names)}\nEach gets: {pot_split:,} {CURRENCY_NAME}", color=0x2ECC71)
-                    await self.game.message.edit(embed=embed, view=None)
-                    del active_poker_games[self.game.ctx.channel.id]
-                else:
-                    await self.game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C), view=None)
-                    del active_poker_games[self.game.ctx.channel.id]
-            else:
-                await self.game.update_embed()
-        else:
-            await self.game.update_embed()
+        await self.game.update_embed()
+        await self.game.send_hand_info(user_id)
 
 class RaiseModal(discord.ui.Modal, title="Raise Amount"):
     amount = discord.ui.TextInput(label="Amount to raise", placeholder="Enter amount", required=True)
@@ -3360,6 +3348,9 @@ async def poker_start_handler(ctx: commands.Context):
         return await ctx.send("❌ Need at least 2 players to start.")
     if game.start_game():
         await game.update_embed()
+        # Send each player their cards via DM
+        for uid in game.players:
+            await game.send_hand_info(uid)
     else:
         await ctx.send("❌ Failed to start game.")
 
