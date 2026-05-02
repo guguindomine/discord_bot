@@ -3515,7 +3515,12 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
         return await ctx.send("❌ Choose heads or tails.")
     
     msg = await ctx.send("🪙 **Flipping...**")
-    await asyncio.sleep(1.5)
+    for _ in range(2):
+        await asyncio.sleep(0.8)
+        await msg.edit(content="🥮 **Flipping...** (Tails)")
+        await asyncio.sleep(0.8)
+        await msg.edit(content="🪙 **Flipping...** (Heads)")
+    await asyncio.sleep(0.8)
 
     inventory = await db.get_inventory(user_id)
     win_chance = await RiggedOdds.calculate_win_chance("cf", inventory)
@@ -3569,14 +3574,13 @@ async def slots_cmd(ctx: commands.Context, bet: int):
     balance = await db.get_balance(user_id)
     if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
     
-    msg = await ctx.send("🎰 **Spinning...**")
-    await asyncio.sleep(1.5)
+    symbols = ["🍒", "🍋", "🍇", "💎", "⭐", "🔔"]
+    msg = await ctx.send("🎰 **Spinning...**\n**[ ❓ | ❓ | ❓ ]**")
     
     inventory = await db.get_inventory(user_id)
     win_chance = await RiggedOdds.calculate_win_chance("slots_normal", inventory)
     
     win = random.random() < win_chance
-    symbols = ["🍒", "🍋", "🍇", "💎", "⭐", "🔔"]
     
     if win:
         res = [random.choice(symbols)] * 3
@@ -3588,6 +3592,12 @@ async def slots_cmd(ctx: commands.Context, bet: int):
         while res[0] == res[1] == res[2]: res = [random.choice(symbols) for _ in range(3)]
         await db.update_balance(user_id, -bet)
         emb = discord.Embed(title="🎰 Slots LOSE", description=f"**[ {' | '.join(res)} ]**\n💀 Lost **{bet:,}** {CURRENCY_NAME}.", color=0xE74C3C)
+        
+    await asyncio.sleep(1.0)
+    await msg.edit(content=f"🎰 **Spinning...**\n**[ {res[0]} | ❓ | ❓ ]**")
+    await asyncio.sleep(1.0)
+    await msg.edit(content=f"🎰 **Spinning...**\n**[ {res[0]} | {res[1]} | ❓ ]**")
+    await asyncio.sleep(1.0)
         
     await db.update_quest_progress(user_id, "gamble")
     await msg.edit(content=None, embed=emb)
@@ -3921,7 +3931,11 @@ class PokerGame:
             embed.add_field(name="⏸️ Your Turn", value=f"<@{current_player}>", inline=False)
         
         self.view = PokerView(self)
-        await self.message.edit(embed=embed, view=self.view)
+        try:
+            await self.message.delete()
+        except:
+            pass
+        self.message = await self.ctx.send(embed=embed, view=self.view)
 
     def stop(self):
         self.view.stop()
