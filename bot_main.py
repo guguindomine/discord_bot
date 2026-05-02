@@ -3412,6 +3412,7 @@ class PokerGame:
         self.current_bet = 0
         self.last_raiser = None
         self.betting_round_complete = False
+        self.acted_players = set()
         return True
 
     def get_current_player_id(self):
@@ -3439,19 +3440,37 @@ class PokerGame:
             self.round = 'river'
         elif self.round == 'river':
             self.round = 'showdown'
+            return
+
         self.current_bet = 0
         self.last_raiser = None
-        self.betting_round_complete = False
+        self.acted_players = set()
+        for p in self.players.values():
+            p['bet'] = 0
+        
+        # Start with player after dealer
         self.current_player_index = (self.dealer_pos + 1) % len(self.players)
+        # Skip folded/all-in players
+        while self.players[self.get_current_player_id()]['folded'] or self.players[self.get_current_player_id()].get('all_in', False):
+            self.current_player_index = (self.current_player_index + 1) % len(self.players)
+            if self.get_active_players_count() <= 1: break
 
     def check_betting_complete(self):
-        """Check if all non-folded players have matched the current bet"""
-        active_players = [p for p in self.players.values() if not p['folded'] and not p.get('all_in', False)]
-        if len(active_players) <= 1:
+        """Check if all non-folded players have matched the current bet and acted"""
+        active_ids = [uid for uid, p in self.players.items() if not p['folded'] and not p.get('all_in', False)]
+        
+        # If 1 or 0 active players who can still bet, betting is complete
+        if len(active_ids) <= 1:
             return True
-        for p in active_players:
-            if p['bet'] != self.current_bet and p['chips'] > 0:
+            
+        # Everyone must have matched the current bet
+        for uid in active_ids:
+            p = self.players[uid]
+            if p['bet'] != self.current_bet:
                 return False
+            if uid not in self.acted_players:
+                return False
+                
         return True
 
     def calculate_hand_strength(self, user_id):
@@ -3521,6 +3540,9 @@ class PokerGame:
         self.view = PokerView(self)
         await self.message.edit(embed=embed, view=self.view)
 
+    def stop(self):
+        self.view.stop()
+
 
 class PokerView(discord.ui.View):
     def __init__(self, game):
@@ -3529,47 +3551,43 @@ class PokerView(discord.ui.View):
 
     @discord.ui.button(label="Fold", style=discord.ButtonStyle.red, emoji="🚫")
     async def fold_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_id = str(interaction.user.id)
-        if user_id != self.game.get_current_player_id():
-            return await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
-        
-        self.game.players[user_id]['folded'] = True
-        await interaction.response.send_message(f"**{interaction.user.display_name}** folded.", ephemeral=False)
-        
-        # Check if only 1 player left
-        if self.game.get_active_players_count() == 1:
-            await self.end_game_early(interaction)
-            return
-        
-        self.game.next_player()
-        await self.game.update_embed()
+        await self.handle_action(interaction, 'fold')
 
     @discord.ui.button(label="Check/Call", style=discord.ButtonStyle.blurple, emoji="✅")
     async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_action(interaction, 'call')
+
+    async def handle_action(self, interaction, action):
         user_id = str(interaction.user.id)
         if user_id != self.game.get_current_player_id():
             return await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
         
         player = self.game.players[user_id]
-        call_amount = min(self.game.current_bet - player['bet'], player['chips'])
+        self.game.acted_players.add(user_id)
         
-        if call_amount > 0:
-            player['bet'] += call_amount
-            player['chips'] -= call_amount
-            self.game.pot += call_amount
+        if action == 'fold':
+            player['folded'] = True
+            await interaction.response.send_message(f"**{interaction.user.display_name}** folded.", ephemeral=False)
+        elif action == 'call':
+            call_amount = min(self.game.current_bet - player['bet'], player['chips'])
             
-            if player['chips'] == 0:
-                player['all_in'] = True
-                await interaction.response.send_message(f"**{interaction.user.display_name}** called and went **All-In**! 🔴", ephemeral=False)
+            if call_amount > 0:
+                player['bet'] += call_amount
+                player['chips'] -= call_amount
+                self.game.pot += call_amount
+                
+                if player['chips'] == 0:
+                    player['all_in'] = True
+                    await interaction.response.send_message(f"**{interaction.user.display_name}** called and went **All-In**! 🔴", ephemeral=False)
+                else:
+                    await interaction.response.send_message(f"**{interaction.user.display_name}** called {call_amount:,} 💰", ephemeral=False)
             else:
-                await interaction.response.send_message(f"**{interaction.user.display_name}** called {call_amount:,} 💰", ephemeral=False)
-        else:
-            await interaction.response.send_message(f"**{interaction.user.display_name}** checked.", ephemeral=False)
+                await interaction.response.send_message(f"**{interaction.user.display_name}** checked.", ephemeral=False)
         
         if self.game.get_active_players_count() == 1:
             await self.end_game_early(interaction)
             return
-        
+            
         if self.game.check_betting_complete():
             self.game.advance_round()
             if self.game.round == 'showdown':
