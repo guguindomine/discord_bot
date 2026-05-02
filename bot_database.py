@@ -230,4 +230,26 @@ class BotDatabase:
         )
 
 
+    # ── MARRIAGE ─────────────────────────────
+    async def marry(self, user_id1: str, user_id2: str):
+        await self.db.users.update_one({"_id": user_id1}, {"$set": {"partner": user_id2}}, upsert=True)
+        await self.db.users.update_one({"_id": user_id2}, {"$set": {"partner": user_id1}}, upsert=True)
+
+    async def divorce(self, user_id1: str, user_id2: str):
+        await self.db.users.update_one({"_id": user_id1}, {"$unset": {"partner": ""}})
+        await self.db.users.update_one({"_id": user_id2}, {"$unset": {"partner": ""}})
+
+    async def get_marriage(self, user_id: str) -> str:
+        user = await self.db.users.find_one({"_id": user_id})
+        return user.get("partner") if user else None
+
+    # ── LIFE STATUS ──────────────────────────
+    async def set_life_status(self, user_id: str, status: bool):
+        """True = Alive, False = Dead"""
+        await self.db.users.update_one({"_id": user_id}, {"$set": {"alive": status}}, upsert=True)
+
+    async def get_life_status(self, user_id: str) -> bool:
+        user = await self.db.users.find_one({"_id": user_id})
+        return user.get("alive", True) if user else True
+
 db = BotDatabase()

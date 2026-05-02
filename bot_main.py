@@ -198,6 +198,11 @@ LEVEL_ROLES = {
     100: {"name": "Paradox Overlord", "color": 0xFFFFFF}
 }
 
+# Load custom roles from config if they exist
+_cfg = load_config()
+if "LEVEL_ROLES" in _cfg:
+    LEVEL_ROLES.update({int(k): v for k, v in _cfg["LEVEL_ROLES"].items()})
+
 def get_xp_for_level(level: int) -> int:
     """XP needed to reach the NEXT level from current."""
     if level < 0: return 0
@@ -278,7 +283,8 @@ async def handle_level_up(member: discord.Member, level: int, channel = None):
             break
             
     if role_info:
-        role_name = role_info["name"]
+        # Include level in the role name as requested
+        role_name = f"Level {req_level}+ | {role_info['name']}"
         role_to_give = discord.utils.get(member.guild.roles, name=role_name)
         
         # 2. Auto-Create Role if Missing
@@ -299,8 +305,13 @@ async def handle_level_up(member: discord.Member, level: int, channel = None):
         # 3. Assign Role and Remove Old Ones
         if role_to_give:
             try:
-                rank_names = [r["name"] for r in LEVEL_ROLES.values()]
-                to_remove = [r for r in member.roles if r.name in rank_names and r.id != role_to_give.id]
+                # Remove any existing kingdom roles
+                to_remove = []
+                for r in member.roles:
+                    # Check if the role is a kingdom role (starts with "Level ")
+                    if r.name.startswith("Level ") and " | " in r.name and r.id != role_to_give.id:
+                        to_remove.append(r)
+                
                 if to_remove:
                     await member.remove_roles(*to_remove)
                 await member.add_roles(role_to_give)
@@ -372,7 +383,6 @@ async def check_loans_task():
             await db.update_balance(user_id, -(amount + penalty))
             await db.clear_loan(user_id)
             print(f"  [ECONOMY] Loan overdue for {user_id}. Penalty applied.")
-
 
 # ══════════════════════════════════════════════
 #  TICKET SYSTEM UI
@@ -469,7 +479,7 @@ class TicketControlView(discord.ui.View):
     async def close_ticket(self, interaction: discord.Interaction):
         await interaction.response.send_message("🚨 **Closing ticket thread in 5 seconds...**")
         import asyncio
-        await asyncio.sleep(5)
+        await asynciosleep(5)
         try:
             await interaction.channel.delete()
         except Exception as e:
@@ -563,7 +573,8 @@ class HelpSelect(discord.ui.Select):
             discord.SelectOption(label="Security & Filter", description="Anti-Scam, Quarantine & Swear Filter", emoji="🛡️", value="security"),
             discord.SelectOption(label="General & Stats", description="Polls, Info & Server data", emoji="📊", value="general"),
             discord.SelectOption(label="Economy & Casino", description="Gambling, Bank & Paradoxals", emoji="🪙", value="economy"),
-            discord.SelectOption(label="Leveling & Ranks", description="XP, Levels & Kingdom Roles", emoji="🏆", value="leveling")
+            discord.SelectOption(label="Leveling & Ranks", description="XP, Levels & Kingdom Roles", emoji="🏆", value="leveling"),
+            discord.SelectOption(label="Social & Marriage", description="Marry, Hug, Kiss & Interactions", emoji="💖", value="social")
         ]
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
@@ -649,7 +660,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
                 f"`{prefix}botinfo` - See bot stats & features\n"
                 f"`{prefix}serverinfo` - See detailed server stats\n"
-                f"`{prefix}help paradox` - Open this menu"
+                f"`{prefix}help paradoxy` - Open this menu"
             )
         elif cat == "economy":
             embed.title = "🪙 Paradoxy Economy"
@@ -696,6 +707,17 @@ class HelpSelect(discord.ui.Select):
                 f"🎙️ Voice: **6 XP / minute**\n\n"
                 f"**🏰 Kingdom Ranks:**\n"
                 f"Unique tiered roles are auto-created and assigned every 5 levels (Level 5, 10, 15... up to 100)!"
+            )
+
+        elif cat == "social":
+            embed.title = "💖 Social & Player Interactions"
+            embed.description = (
+                f"`{prefix}marry <@user>` - Propose to a member\n"
+                f"`{prefix}divorce` - End your current marriage\n"
+                f"`{prefix}marriage [@user]` - View marriage status\n\n"
+                "**Fun Interactions:**\n"
+                f"`{prefix}hug` / `{prefix}kiss` / `{prefix}cuddle` / `{prefix}lick` / `{prefix}pat`\n"
+                f"`{prefix}slap` / `{prefix}punch` / `{prefix}bite` / `{prefix}poke` / `{prefix}shoot` / `{prefix}stab` / `{prefix}tackle` / `{prefix}highfive` / `{prefix}wave` / `{prefix}dance` / `{prefix}feed` / `{prefix}carry` / `{prefix}bully`"
             )
 
         embed.set_footer(text=f"Paradox Bot 💜 | {cat.capitalize()} Menu")
@@ -846,7 +868,6 @@ class MacroTicketView(discord.ui.View):
         await channel.send(content=f"{member.mention} | Staff", embed=embed, view=TicketControlView(vouch_enabled=False))
         await interaction.response.send_message(f"✅ Created! Check {channel.mention}", ephemeral=True)
 
-
 # ══════════════════════════════════════════════
 #  EVENTS
 # ══════════════════════════════════════════════
@@ -859,6 +880,20 @@ async def on_ready():
     mongo_uri = os.getenv("MONGO_URI")
     if mongo_uri:
         db.setup(mongo_uri)
+        
+        # ── Sync Config from Database ──
+        db_cfg = await db.get_config()
+        if db_cfg:
+            local_cfg = load_config()
+            local_cfg.update(db_cfg)
+            save_config(local_cfg)
+            
+            # Update global LEVEL_ROLES if present in DB
+            if "LEVEL_ROLES" in db_cfg:
+                global LEVEL_ROLES
+                LEVEL_ROLES.update({int(k): v for k, v in db_cfg["LEVEL_ROLES"].items()})
+                
+            print("  📁  Configuration synced from Database to local storage.")
     
     # Register persistent views
     bot.add_view(SupportTicketView())
@@ -887,7 +922,6 @@ async def on_ready():
         name=f"{PREFIX}help | Paradox Bot 💜"
     )
     await bot.change_presence(status=discord.Status.online, activity=activity)
-
 
 # ── AUTO-ROLE + WELCOME MESSAGE ──────────────
 
@@ -955,7 +989,6 @@ async def on_member_join(member: discord.Member):
         except discord.Forbidden:
             print(f"  [WARN] Can't DM {member.name} (DMs disabled)")
 
-
 # ── GOODBYE MESSAGE ──────────────────────────
 
 @bot.event
@@ -990,7 +1023,6 @@ async def on_member_remove(member: discord.Member):
 
             embed.set_footer(text="Paradox Bot 💜")
             await channel.send(embed=embed)
-
 
 # ── SWEAR WORD FILTER ────────────────────────
 
@@ -1221,7 +1253,6 @@ async def on_message(message: discord.Message):
     # Process commands if no swear words were found
     await bot.process_commands(message)
 
-
 # ── LOGGING EVENTS ───────────────────────────
 
 @bot.event
@@ -1295,7 +1326,6 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
     
     await log_channel.send(embed=embed)
 
-
 # ══════════════════════════════════════════════
 #  COMMANDS
 # ══════════════════════════════════════════════
@@ -1320,8 +1350,8 @@ async def help_cmd(ctx: commands.Context, *sub: str):
         except discord.Forbidden:
             await ctx.send("❌ I can't DM you. Please enable DMs from server members.")
         return
-    if sub_text not in {"paradox", "paradoxy", ""}:
-        await ctx.send(f"❓ Type `{PREFIX}help paradox` to open my interactive menu!")
+    if sub_text not in {"paradoxy", ""}:
+        await ctx.send(f"❓ Type `{PREFIX}help paradoxy` to open my interactive menu!")
         return
 
     embed = discord.Embed(
@@ -1341,7 +1371,6 @@ async def help_cmd(ctx: commands.Context, *sub: str):
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     
     await ctx.send(embed=embed, view=HelpView())
-
 
 # ── !setupticket ─────────────────────────────
 
@@ -1490,7 +1519,6 @@ async def set_helper_text(ctx: commands.Context, game_code: str, *, questions_in
     
     await ctx.send(f"✅ Questions updated for **{games[game_code]['name']}**! (Total: {len(new_questions)})")
 
-
 # ── !testjoin ────────────────────────────────
 
 @bot.command(name="testjoin")
@@ -1573,8 +1601,6 @@ async def test_leave_cmd(ctx: commands.Context):
     else:
         await ctx.send("❌ No goodbye channel set!")
 
-
-
 # ── !goodbye ─────────────────────────────────
 
 @bot.command(name="goodbye")
@@ -1603,7 +1629,6 @@ async def set_welcome_cmd(ctx: commands.Context, *, message: str):
     await save_config_sync(cfg)
     await ctx.send(f"✅ Join message updated! Try `!testjoin` to see it.")
 
-
 # ── !setgoodbye ──────────────────────────────
 
 @bot.group(name="setgoodbye", invoke_without_command=True)
@@ -1631,7 +1656,6 @@ async def set_goodbye_channel_cmd(ctx: commands.Context, channel: discord.TextCh
     cfg["GOODBYE_CHANNEL_ID"] = channel.id
     await save_config_sync(cfg)
     await ctx.send(f"✅ Goodbye channel set to {channel.mention}")
-
 
 # ── !setimg ──────────────────────────────────
 
@@ -1686,7 +1710,7 @@ async def log_whitelist_add(ctx: commands.Context, member: discord.Member):
     whitelist.append(member.id)
     cfg["LOG_WHITELISTED_USERS"] = whitelist
     await save_config_sync(cfg)
-    await ctx.send(f"✅ {member.mention} foi adicionado à whitelist de logs! Suas mensagens não serão mais registradas.")
+    await ctx.send(f"✅ {member.mention} has been added to the log whitelist! Their messages will no longer be logged.")
 
 @log_whitelist_grp.command(name="remove")
 @commands.has_permissions(administrator=True)
@@ -1702,7 +1726,7 @@ async def log_whitelist_remove(ctx: commands.Context, member: discord.Member):
     whitelist.remove(member.id)
     cfg["LOG_WHITELISTED_USERS"] = whitelist
     await save_config_sync(cfg)
-    await ctx.send(f"✅ {member.mention} removido da whitelist de logs. Suas atividades voltarão a ser registradas.")
+    await ctx.send(f"✅ {member.mention} removed from the log whitelist. Their activities will be logged again.")
 
 # ── !level ───────────────────────────────────
 
@@ -1820,6 +1844,23 @@ async def set_level_channel_cmd(ctx: commands.Context, channel: discord.TextChan
     await save_config_sync(cfg)
     await ctx.send(f"✅ Level-up notifications will now be sent in {channel.mention}")
 
+@bot.command(name="setrank")
+@commands.has_permissions(administrator=True)
+async def set_rank_cmd(ctx: commands.Context, level: int, *, name: str):
+    """Set the name of a rank for a specific level. Admin only.
+    Usage: !setrank 5 Squire
+    """
+    global LEVEL_ROLES
+    LEVEL_ROLES[level] = {"name": name, "color": 0x9B59B6} # Default purple if new
+    
+    # Save to config to persist
+    cfg = load_config()
+    cfg["LEVEL_ROLES"] = {str(k): v for k, v in LEVEL_ROLES.items()}
+    await save_config_sync(cfg)
+    
+    await ctx.send(f"✅ Level **{level}** rank set to **{name}**.")
+    await ctx.send("ℹ️ New roles will include the level prefix automatically (e.g. `Level {level}+ | {name}`).")
+
 @log_whitelist_grp.command(name="list")
 @commands.has_permissions(administrator=True)
 async def log_whitelist_list(ctx: commands.Context):
@@ -1828,7 +1869,7 @@ async def log_whitelist_list(ctx: commands.Context):
     whitelist = cfg.get("LOG_WHITELISTED_USERS", [])
     
     if not whitelist:
-        await ctx.send("ℹ️ A whitelist de logs está vazia.")
+        await ctx.send("ℹ️ The log whitelist is empty.")
         return
         
     mentions = [f"<@{uid}>" for uid in whitelist]
@@ -1838,7 +1879,6 @@ async def log_whitelist_list(ctx: commands.Context):
         color=0xF1C40F
     )
     await ctx.send(embed=embed)
-
 
 # ── !setcolor ────────────────────────────────
 
@@ -1872,7 +1912,6 @@ async def set_autorole_cmd(ctx: commands.Context, *, role_name: str):
     await save_config_sync(cfg)
     await ctx.send(f"✅ Auto-role set to **{role.name}**")
 
-
 # ── !setwelcomechannel ───────────────────────
 
 @bot.command(name="setwelcomechannel")
@@ -1886,7 +1925,6 @@ async def set_welcome_channel_cmd(ctx: commands.Context, channel: discord.TextCh
     cfg["GOODBYE_CHANNEL_ID"] = channel.id
     await save_config_sync(cfg)
     await ctx.send(f"✅ Welcome & goodbye channel set to {channel.mention}")
-
 
 # ── !setlogchannel ───────────────────────────
 
@@ -1998,7 +2036,6 @@ async def add_swear_cmd(ctx: commands.Context, *, word: str):
 
     await ctx.send(f"✅ Word added to the swear filter. (Total: {len(swear_list)} words)")
 
-
 # ── !removeswear ─────────────────────────────
 
 class PollView(discord.ui.View):
@@ -2086,7 +2123,6 @@ async def remove_swear_cmd(ctx: commands.Context, *, word: str):
     await save_config_sync(cfg)
     await ctx.send(f"✅ Word removed from the swear filter. (Total: {len(new_list)} words)")
 
-
 # ── !togglefilter ────────────────────────────
 
 @bot.command(name="togglefilter")
@@ -2100,7 +2136,6 @@ async def toggle_filter_cmd(ctx: commands.Context):
 
     status = "🟢 **ON**" if not current else "🔴 **OFF**"
     await ctx.send(f"Swear filter is now {status}")
-
 
 # ── !swearlog ───────────────────────────────
 
@@ -2144,9 +2179,6 @@ async def swear_log_cmd(ctx: commands.Context, member: discord.Member = None):
         
         embed.description = text or "No data available."
         await ctx.send(embed=embed)
-
-
-
 
 # ── SECURITY: QUARANTINE SYSTEM ──
 
@@ -2214,8 +2246,7 @@ async def mute_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason="No
 async def quarantine_cmd(ctx, member: discord.Member):
     """Manually send a member to quarantine. Admin only."""
     await apply_quarantine(member, "Manual Moderator Action")
-    ch_name = QUARANTINE_CHANNEL_NAME
-    await ctx.send(f"⚖️ **{member.display_name}** foi enviado para a quarentena.")
+    await ctx.send(f"⚖️ **{member.display_name}** has been sent to quarantine.")
 
 @bot.command(name="addscam")
 @commands.has_permissions(administrator=True)
@@ -2223,7 +2254,7 @@ async def add_scam_cmd(ctx, link: str):
     """Add a new link to the phishing blacklist."""
     global SCAM_LINKS
     if link in SCAM_LINKS:
-        await ctx.send("⚠️ Este link já está na blacklist.")
+        await ctx.send("⚠️ This link is already in the blacklist.")
         return
     SCAM_LINKS.append(link)
     
@@ -2231,7 +2262,7 @@ async def add_scam_cmd(ctx, link: str):
     cfg["SCAM_LINKS"] = SCAM_LINKS
     await save_config_sync(cfg)
     
-    await ctx.send(f"✅ Link `{link}` adicionado ao filtro de phishing!")
+    await ctx.send(f"✅ Link `{link}` added to phishing filter!")
 
 @bot.command(name="clearscamlog")
 @commands.has_permissions(administrator=True)
@@ -2240,9 +2271,9 @@ async def clear_scam_log_cmd(ctx, member: discord.Member):
     strikes = await db.get_scam_strikes(str(member.id))
     if strikes > 0:
         await db.clear_scam_strikes(str(member.id))
-        await ctx.send(f"✅ Histórico de phishing de {member.display_name} foi limpo.")
+        await ctx.send(f"✅ Phishing history for {member.display_name} has been cleared.")
     else:
-        await ctx.send("ℹ️ Este usuário não possui histórico de phishing.")
+        await ctx.send("ℹ️ This user has no phishing history.")
 
 @bot.command(name="unquarantine")
 @commands.has_permissions(administrator=True)
@@ -2266,16 +2297,16 @@ async def unquarantine_cmd(ctx, member: discord.Member):
         if roles_to_add:
             try:
                 await member.add_roles(*roles_to_add, reason="Released from quarantine")
-                await ctx.send(f"✅ **{member.display_name}** liberado! {len(roles_to_add)} cargos devolvidos.")
+                await ctx.send(f"✅ **{member.display_name}** released! {len(roles_to_add)} roles returned.")
             except:
-                await ctx.send(f"✅ **{member.display_name}** liberado, mas houve um erro ao devolver alguns cargos.")
+                await ctx.send(f"✅ **{member.display_name}** released, but there was an error returning some roles.")
         else:
-            await ctx.send(f"✅ **{member.display_name}** liberado da quarentena!")
+            await ctx.send(f"✅ **{member.display_name}** released from quarantine!")
             
         # Clean up db
         await db.clear_quarantine_roles(str(member.id))
     else:
-        await ctx.send(f"ℹ️ **{member.display_name}** não está na quarentena.")
+        await ctx.send(f"ℹ️ **{member.display_name}** is not in quarantine.")
 
 @bot.command(name="setthreshold")
 @commands.has_permissions(administrator=True)
@@ -2293,11 +2324,11 @@ async def set_threshold_cmd(ctx, system: str, key: str, value: int):
         thresholds[key] = value
         cfg["SCAM_THRESHOLDS"] = thresholds
     else:
-        await ctx.send("❌ Use `swear` ou `scam` como sistema.")
+        await ctx.send("❌ Use `swear` or `scam` as the system.")
         return
         
     await save_config_sync(cfg)
-    await ctx.send(f"✅ Limite de `{system}` para `{key}` atualizado para `{value}`!")
+    await ctx.send(f"✅ Threshold for `{system}` ({key}) updated to `{value}`!")
 
 # ── !botinfo ─────────────────────────────────
 
@@ -2327,7 +2358,6 @@ async def bot_info_cmd(ctx: commands.Context):
     embed.set_footer(text="Paradox Bot 💜 | Made with discord.py")
     await ctx.send(embed=embed)
 
-
 # ── !serverinfo ──────────────────────────────
 
 @bot.command(name="serverinfo")
@@ -2349,7 +2379,6 @@ async def server_info_cmd(ctx: commands.Context):
     embed.set_footer(text="Paradox Bot 💜")
     await ctx.send(embed=embed)
 
-
 # ── !purge ───────────────────────────────────
 
 @bot.command(name="purge")
@@ -2365,7 +2394,6 @@ async def purge_cmd(ctx: commands.Context, amount: int = 5):
     deleted = await ctx.channel.purge(limit=amount + 1)  # +1 for the command message
     msg = await ctx.send(f"🗑️ Deleted **{len(deleted) - 1}** messages.")
     await msg.delete(delay=3)
-
 
 # ── !kick ────────────────────────────────────
 
@@ -2387,7 +2415,6 @@ async def kick_cmd(ctx: commands.Context, member: discord.Member, *, reason: str
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to kick that user.")
 
-
 # ── !ban ─────────────────────────────────────
 
 @bot.command(name="ban")
@@ -2407,7 +2434,6 @@ async def ban_cmd(ctx: commands.Context, member: discord.Member, *, reason: str 
         await ctx.send(embed=embed)
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to ban that user.")
-
 
 # ── !testboost / !setboost ────────────────────
 @bot.command(name="testboost", aliases=["setboost"])
@@ -2663,7 +2689,6 @@ async def say_color_cmd(ctx: commands.Context, color: str, *, text: str):
     try: await ctx.message.delete()
     except: pass
 
-
 # ── !add & !remove (Ticket Management) ────────
 
 @bot.command(name="add")
@@ -2687,8 +2712,6 @@ async def remove_ticket_user(ctx: commands.Context, member: discord.Member):
         
     await ctx.channel.set_permissions(member, overwrite=None)
     await ctx.send(f"✅ Removed {member.display_name} from the ticket.")
-
-
 
 @bot.command(name="migrate")
 @commands.has_permissions(administrator=True)
@@ -3022,7 +3045,6 @@ class HeistDifficultyView(discord.ui.View):
             await interaction.response.edit_message(content=None, embed=embed, view=None)
         return heist_callback
 
-
 # ══════════════════════════════════════════════
 #  ERROR HANDLING
 # ══════════════════════════════════════════════
@@ -3047,9 +3069,6 @@ async def on_command_error(ctx: commands.Context, error):
         pass  # Silently ignore unknown commands
     else:
         print(f"  [ERROR] {type(error).__name__}: {error}")
-
-
-
 
 # ══════════════════════════════════════════════
 #  ECONOMY & CASINO SYSTEM
@@ -3326,7 +3345,7 @@ async def bj_cmd(ctx: commands.Context, amount: str):
             return await ctx.send("❌ Please enter a valid bet amount or `all`.")
 
     if bet <= 0:
-        return await ctx.send("❌ Bet must be greater than zero.")
+        return await ctx.send("❌ Bet must be greater than zer✅")
     if bet > balance:
         return await ctx.send(f"❌ You do not have enough {CURRENCY_NAME}. Your wallet has {balance:,}.")
 
@@ -3435,7 +3454,7 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
         return await ctx.send("❌ Choose heads or tails.")
     
     msg = await ctx.send("🪙 **Flipping...**")
-    await asyncio.sleep(1.5)
+    await asynciosleep(1.5)
 
     inventory = await db.get_inventory(user_id)
     win_chance = await RiggedOdds.calculate_win_chance("cf", inventory)
@@ -3480,7 +3499,6 @@ async def allow_cmd(ctx: commands.Context, member: discord.Member, *, command: s
     """Allow a user to use a hidden command. Admin only."""
     await ctx.send("❌ No commands currently available to allow.")
 
-
 # ── GAMBLING GAMES ────────────────────────────
 
 @bot.command(name="slots")
@@ -3491,7 +3509,7 @@ async def slots_cmd(ctx: commands.Context, bet: int):
     if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
     
     msg = await ctx.send("🎰 **Spinning...**")
-    await asyncio.sleep(1.5)
+    await asynciosleep(1.5)
     
     inventory = await db.get_inventory(user_id)
     win_chance = await RiggedOdds.calculate_win_chance("slots_normal", inventory)
@@ -3524,7 +3542,7 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
     win_chance = await RiggedOdds.calculate_win_chance("roulette_red", inventory)
     
     msg = await ctx.send("🎡 **Spinning...**")
-    await asyncio.sleep(2)
+    await asynciosleep(2)
     
     win = random.random() < win_chance
     reds = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
@@ -3571,7 +3589,6 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
         embed.color = 0xE74C3C
         
     await roll_msg.edit(content=None, embed=embed)
-
 
 # ── POKER SYSTEM ──────────────────────────────
 
@@ -3665,7 +3682,6 @@ def evaluate_poker_hand(hole_cards, community_cards):
     # High card
     high = max(ranks)
     return (1, f"High Card 🃏")
-
 
 class PokerGame:
     def __init__(self, ctx, min_buyin, max_buyin):
@@ -3849,7 +3865,6 @@ class PokerGame:
     def stop(self):
         self.view.stop()
 
-
 class PokerView(discord.ui.View):
     def __init__(self, game):
         super().__init__(timeout=300)
@@ -3926,7 +3941,7 @@ class PokerView(discord.ui.View):
         # Show initial analyzing message
         await interaction.response.send_message(embed=discord.Embed(title="🤔 Analyzing Your Hand...", description="⏳ Computing hand strength...", color=0x3498DB), ephemeral=True)
         
-        await asyncio.sleep(1.5)
+        await asynciosleep(1.5)
         
         # Show results
         result_embed = discord.Embed(title="🃏 Your Hand Analysis", color=0x9B59B6)
@@ -3987,7 +4002,7 @@ class PokerView(discord.ui.View):
         
         # Animate dealer thinking
         await interaction.channel.send("🤔 **The dealer is comparing hands...**")
-        await asyncio.sleep(2)
+        await asynciosleep(2)
         
         winners, hands = self.game.get_winners()
         
@@ -4025,7 +4040,6 @@ class PokerView(discord.ui.View):
         await interaction.channel.send(embed=embed)
         if self.game.ctx.channel.id in active_poker_games:
             del active_poker_games[self.game.ctx.channel.id]
-
 
 class RaiseModal(discord.ui.Modal, title="💰 Raise Amount"):
     amount_input = discord.ui.TextInput(
@@ -4186,7 +4200,6 @@ async def poker_start_handler(ctx: commands.Context):
     else:
         await ctx.send("❌ Failed to start game.")
 
-
 # ── BLACKJACK SYSTEM ──────────────────────────
 
 # ── BLACKJACK SYSTEM ──────────────────────────
@@ -4343,7 +4356,7 @@ class BlackjackView(discord.ui.View):
         else:
             await interaction.edit_original_response(content="⏳ **Dealer is thinking...**", view=None)
 
-        await asyncio.sleep(1.5)
+        await asynciosleep(1.5)
 
         while self.get_score(self.dealer_hand) < 17:
             self.dealer_hand.append(self.deck.pop())
@@ -4507,7 +4520,7 @@ class CrimeDifficultyView(discord.ui.View):
         msg = await interaction.original_response()
         
         # Wait for memorization
-        await asyncio.sleep(5)
+        await asynciosleep(5)
         
         if self.is_over: return # In case they somehow finished or cancelled
         
@@ -4656,7 +4669,6 @@ class CrimeDifficultyView(discord.ui.View):
         except Exception:
             pass
 
-
 class TeamHeistView(discord.ui.View):
     def __init__(self, leader):
         super().__init__(timeout=45)
@@ -4674,7 +4686,6 @@ class TeamHeistView(discord.ui.View):
         embed = interaction.message.embeds[0]
         embed.description = f"**Current Team:**\n" + "\n".join([f"<@{m}>" for m in self.members]) + f"\n\n*Starting in 30s...*"
         await interaction.message.edit(embed=embed)
-
 
 @bot.command(name="heist")
 async def heist_cmd(ctx: commands.Context):
@@ -4736,237 +4747,173 @@ async def reset_cooldowns_cmd(ctx: commands.Context, target: str = None):
 
 @bot.command(name="reseteco")
 @commands.is_owner()
+@bot.command(name="reseteco")
+@commands.is_owner()
 async def reset_eco_cmd(ctx: commands.Context, target: str = None):
     """Reset the economy for all users or a specific user (Owner only)."""
     if target == "all":
-        # Confirmation check to prevent accidental wipes
         confirm_msg = await ctx.send("⚠️ **WARNING:** You are about to wipe the economy for **ALL** users. Type `CONFIRM` in 10s to proceed.")
-        
         def check(m):
             return m.author == ctx.author and m.channel == ctx.channel and m.content == "CONFIRM"
-            
         try:
             await bot.wait_for("message", check=check, timeout=10.0)
         except asyncio.TimeoutError:
             return await confirm_msg.edit(content="❌ **Reset cancelled.** You didn't confirm in time.")
-
-        await db.db.users.update_many({}, {
-            "$set": {
-                "balance": 0,
-                "bank": 0,
-                "inventory": [],
-                "quests": {},
-                "loan": {}
-            }
-        })
+        await db.db.users.update_many({}, {"$set": {"balance": 0, "bank": 0, "inventory": [], "quests": {}, "loan": {}}})
         await ctx.send("💥 **ECONOMY RESET!** All balances, banks, and inventories have been wiped for everyone.")
     elif target and (target.startswith("<@") or target.isdigit()):
         user_id = target.strip("<@!>")
-        await db.db.users.update_one({"_id": user_id}, {
-            "$set": {
-                "balance": 0,
-                "bank": 0,
-                "inventory": [],
-                "quests": {},
-                "loan": {}
-            }
-        })
+        await db.db.users.update_one({"_id": user_id}, {"$set": {"balance": 0, "bank": 0, "inventory": [], "quests": {}, "loan": {}}})
         await ctx.send(f"🧹 **Economy reset for <@{user_id}>.**")
     else:
         await ctx.send(f"❓ Usage: `{PREFIX}reseteco all` or `{PREFIX}reseteco @user`.")
-
-@bot.command(name="crime")
-async def crime_cmd(ctx: commands.Context):
-    """Commit a quick random crime for fast cash."""
-    user_id = str(ctx.author.id)
-    jail_end = await db.get_cooldown(user_id, "jail")
-    if jail_end and datetime.now() < jail_end:
-        rem = jail_end - datetime.now()
-        return await ctx.send(f"🔒 You are in **Jail**! Release in **{int(rem.total_seconds()//60)}m**.")
-
-    last_crime = await db.get_cooldown(user_id, "crime")
-    cd = COMMAND_COOLDOWNS["crime"]
-    if last_crime and datetime.now() < last_crime + timedelta(seconds=cd):
-        rem = (last_crime + timedelta(seconds=cd)) - datetime.now()
-        return await ctx.send(f"⏳ Wait **{int(rem.total_seconds())}s**.")
-
-    scenarios = [
-        {"name": "Pickpocketing", "msg": "You swiped a wallet!", "win_range": (2000, 5000), "fail_msg": "Caught!", "fine_range": (1000, 3000), "chance": 0.65},
-        {"name": "Vandalism", "msg": "Spray-painted a car!", "win_range": (3000, 7000), "fail_msg": "Alarm!", "fine_range": (2000, 4000), "chance": 0.55},
-        {"name": "Hacking", "msg": "Bypassed an ATM!", "win_range": (8000, 15000), "fail_msg": "Tracked!", "fine_range": (4000, 8000), "chance": 0.45}
-    ]
-    
-    msg = await ctx.send("🕵️ **Planning crime...**")
-    await asyncio.sleep(1.5)
-    
-    crime = random.choice(scenarios)
-    inventory = await db.get_inventory(user_id)
-    chance_mod = 0.15 if "Crime Mask" in inventory else 0
-    
-    success = random.random() < (crime["chance"] + chance_mod)
-    await db.set_cooldown(user_id, "crime", datetime.now())
-    await db.update_quest_progress(user_id, "crime")
-
-    if success:
-        amount = random.randint(*crime["win_range"])
-        await db.update_balance(user_id, amount)
-        embed = discord.Embed(title=f"✅ Crime: {crime['name']}", description=f"{crime['msg']}\n\nYou earned **{amount:,}** {CURRENCY_NAME}!", color=0x2ECC71)
-    else:
-        loss = random.randint(*crime["fine_range"])
-        if "Crime Mask" in inventory: loss = int(loss * 0.7)
-        await db.update_balance(user_id, -loss)
-        embed = discord.Embed(title=f"🚨 Busted: {crime['name']}", description=f"{crime['fail_msg']}\n\nYou were fined **{loss:,}** {CURRENCY_NAME}!", color=0xE74C3C)
-    
-    await msg.edit(content=None, embed=embed)
-
-@bot.command(name="steal")
-async def steal_cmd(ctx: commands.Context, target: discord.Member):
-    """Attempt to rob another user's wallet."""
-    if target.id == ctx.author.id: return await ctx.send("❌ Can't rob yourself.")
-    if target.bot: return await ctx.send("❌ Can't rob bots.")
-    
-    t_id = str(target.id)
-    a_id = str(ctx.author.id)
-    t_bal = await db.get_balance(t_id)
-    
-    if t_bal < 5000: return await ctx.send(f"❌ {target.display_name} is too poor.")
-
-    last_steal = await db.get_cooldown(a_id, "steal")
-    cd = COMMAND_COOLDOWNS["steal"]
-    if last_steal and datetime.now() < last_steal + timedelta(seconds=cd):
-        rem = (last_steal + timedelta(seconds=cd)) - datetime.now()
-        return await ctx.send(f"⏳ Wait **{int(rem.total_seconds()//60)}m**.")
-
-    t_inv = await db.get_inventory(t_id)
-    if "Shield" in t_inv and random.random() < 0.4:
-        return await ctx.send(f"🛡️ **{target.display_name}**'s **Shield** blocked you!")
-
-    a_inv = await db.get_inventory(a_id)
-    success_chance = 0.35 + (0.12 if "Thief Kit" in a_inv else 0)
-    
-    success = random.random() < success_chance
-    await db.set_cooldown(a_id, "steal", datetime.now())
-    await db.update_quest_progress(a_id, "steal")
-
-    if success:
-        stolen = random.randint(int(t_bal * 0.1), int(t_bal * 0.3))
-        await db.update_balance(t_id, -stolen)
-        await db.update_balance(a_id, stolen)
-        await ctx.send(f"💸 You robbed **{target.display_name}** for **{stolen:,}** {CURRENCY_NAME}!")
-    else:
-        fine = random.randint(2000, 6000)
-        await db.update_balance(a_id, -fine)
-        await ctx.send(f"🚔 Caught! paid **{fine:,}** fine.")
-
-@bot.command(name="bail")
-async def bail_cmd(ctx: commands.Context):
-    """Pay bail to get out of jail early."""
-    user_id = str(ctx.author.id)
-    jail_end = await db.get_cooldown(user_id, "jail")
-    if not jail_end or datetime.now() >= jail_end: return await ctx.send("❌ Not in jail.")
-    
-    rem = jail_end - datetime.now()
-    cost = max(1, int(rem.total_seconds() / 60)) * 1000
-    
-    bal = await db.get_balance(user_id)
-    if bal < cost: return await ctx.send(f"❌ Bail costs **{cost:,}**. You have **{bal:,}**.")
-    
-    await db.update_balance(user_id, -cost)
-    await db.set_cooldown(user_id, "jail", datetime.now())
-    await ctx.send(f"✅ Paid **{cost:,}** bail and released!")
-
 # ── SOCIAL ACTIONS ─────────────────────────────
-
+SOCIAL_MESSAGES = {
+    "punch": {"msgs": ["{author} punched {target} square in the face!", "{author} gave {target} a quick jab!"], "color": 0xE74C3C, "emoji": "🤜"},
+    "slap": {"msgs": ["{author} slapped {target} with a wet noodle!", "{author} slapped {target}! *SMACK*"], "color": 0xE74C3C, "emoji": "✋"},
+    "kick": {"msgs": ["{author} sent {target} flying with a powerful kick!"], "color": 0xE74C3C, "emoji": "🦵"},
+    "bite": {"msgs": ["{author} gave {target} a playful love bite!"], "color": 0xE74C3C, "emoji": "🦷"},
+    "bully": {"msgs": ["{author} is stuffing {target} into a locker!"], "color": 0x34495E, "emoji": "💢"},
+    "bonk": {"msgs": ["{author} bonked {target} on the head with a hammer!"], "color": 0xF1C40F, "emoji": "🔨"},
+    "stab": {"msgs": ["{author} stabbed {target} with a plastic spoon!"], "color": 0xE74C3C, "emoji": "🔪"},
+    "yeet": {"msgs": ["{author} yeeted {target} across the server!"], "color": 0xE67E22, "emoji": "🚀"},
+    "hug": {"msgs": ["{author} gave {target} a warm, fuzzy hug!"], "color": 0x3498DB, "emoji": "🫂"},
+    "kiss": {"msgs": ["{author} gave {target} a sweet kiss!"], "color": 0xFF69B4, "emoji": "💋"},
+    "cuddle": {"msgs": ["{author} is cuddling with {target}!"], "color": 0x3498DB, "emoji": "🫂"},
+    "pat": {"msgs": ["{author} patted {target} on the head."], "color": 0xF1C40F, "emoji": "🤚"},
+    "highfive": {"msgs": ["{author} and {target} shared an epic high five!"], "color": 0xF1C40F, "emoji": "🙌"},
+    "holdhands": {"msgs": ["{author} is shyly holding hands with {target}."], "color": 0xFF69B4, "emoji": "🤝"},
+    "tickle": {"msgs": ["{author} is tickling {target} relentlessly!"], "color": 0xF1C40F, "emoji": "🤣"},
+    "nuzzle": {"msgs": ["{author} nuzzled against {target} affectionately."], "color": 0xFF69B4, "emoji": "😽"},
+    "feed": {"msgs": ["{author} fed {target} a delicious cookie!"], "color": 0x2ECC71, "emoji": "🍔"},
+    "carry": {"msgs": ["{author} is carrying {target} bridal style!"], "color": 0x3498DB, "emoji": "💪"},
+    "sleep": {"msgs": ["{author} tucked {target} into bed. Sleep tight!"], "color": 0x34495E, "emoji": "😴"},
+    "lick": {"msgs": ["{author} licked {target}! That's... a bit awkward."], "color": 0xFF69B4, "emoji": "👅"},
+    "poke": {"msgs": ["{author} poked {target}! Are you awake?"], "color": 0x3498DB, "emoji": "👉"},
+    "comfort": {"msgs": ["{author} patted {target} on the back. It's going to be okay."], "color": 0x3498DB, "emoji": "🤝"},
+    "shoot": {"msgs": ["{author} shot {target} with a nerf gun! *Pew pew*"], "color": 0xE74C3C, "emoji": "🔫"},
+    "tackle": {"msgs": ["{author} tackled {target} to the ground! 🏈"], "color": 0xE67E22, "emoji": "🤸"},
+    "wave": {"msgs": ["{author} waved at {target}. Hello there!"], "color": 0x3498DB, "emoji": "👋"},
+    "dance": {"msgs": ["{author} is dancing with {target}! 💃🕺"], "color": 0x9B59B6, "emoji": "💃"},
+}
+async def send_social_embed(ctx, target, action):
+    data = SOCIAL_MESSAGES.get(action)
+    if not data: return
+    import random
+    msg_tpl = random.choice(data["msgs"])
+    desc = msg_tpl.replace("{author}", ctx.author.mention).replace("{target}", target.mention)
+    embed = discord.Embed(description=f"{data['emoji']} {desc}", color=data["color"])
+    await ctx.send(embed=embed)
 @bot.command(name="punch")
-async def punch_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🤜 {ctx.author.mention} punched {target.mention}!", color=0xE74C3C)
-    await ctx.send(embed=embed)
-
-@bot.command(name="hug")
-async def hug_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🫂 {ctx.author.mention} gave {target.mention} a warm hug!", color=0x3498DB)
-    await ctx.send(embed=embed)
-
-@bot.command(name="kiss")
-async def kiss_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"💋 {ctx.author.mention} kissed {target.mention}!", color=0xFF69B4)
-    await ctx.send(embed=embed)
-
+async def punch_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "punch")
 @bot.command(name="slap")
-async def slap_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"✋ {ctx.author.mention} slapped {target.mention}! Ouch.", color=0xE74C3C)
-    await ctx.send(embed=embed)
-
-@bot.command(name="pat")
-async def pat_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🤚 {ctx.author.mention} patted {target.mention}'s head.", color=0xF1C40F)
-    await ctx.send(embed=embed)
-
-@bot.command(name="poke")
-async def poke_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"👉 {ctx.author.mention} poked {target.mention}!", color=0x3498DB)
-    await ctx.send(embed=embed)
-
+async def slap_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "slap")
+@bot.command(name="kick")
+async def kick_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "kick")
 @bot.command(name="bite")
-async def bite_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🦷 {ctx.author.mention} bit {target.mention}!", color=0xE74C3C)
-    await ctx.send(embed=embed)
-
-@bot.command(name="lick")
-async def lick_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"👅 {ctx.author.mention} licked {target.mention}!", color=0xFF69B4)
-    await ctx.send(embed=embed)
-
-@bot.command(name="cuddle")
-async def cuddle_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🫂 {ctx.author.mention} is cuddling with {target.mention}!", color=0x3498DB)
-    await ctx.send(embed=embed)
-
-@bot.command(name="wave")
-async def wave_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"👋 {ctx.author.mention} waved at {target.mention}!", color=0x3498DB)
-    await ctx.send(embed=embed)
-
-@bot.command(name="dance")
-async def dance_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"💃 {ctx.author.mention} is dancing with {target.mention}!", color=0x9B59B6)
-    await ctx.send(embed=embed)
-
-@bot.command(name="shoot")
-async def shoot_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🔫 {ctx.author.mention} shot {target.mention}! Oh no!", color=0x34495E)
-    await ctx.send(embed=embed)
-
-@bot.command(name="stab")
-async def stab_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🔪 {ctx.author.mention} stabbed {target.mention}!", color=0xE74C3C)
-    await ctx.send(embed=embed)
-
-@bot.command(name="tackle")
-async def tackle_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🏈 {ctx.author.mention} tackled {target.mention}!", color=0xE67E22)
-    await ctx.send(embed=embed)
-
-@bot.command(name="highfive", aliases=["h5"])
-async def highfive_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🙌 {ctx.author.mention} gave {target.mention} a high five!", color=0xF1C40F)
-    await ctx.send(embed=embed)
-
-@bot.command(name="feed")
-async def feed_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"🍔 {ctx.author.mention} is feeding {target.mention}!", color=0x2ECC71)
-    await ctx.send(embed=embed)
-
-@bot.command(name="carry")
-async def carry_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"💪 {ctx.author.mention} is carrying {target.mention}!", color=0x3498DB)
-    await ctx.send(embed=embed)
-
+async def bite_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "bite")
 @bot.command(name="bully")
-async def bully_cmd(ctx, target: discord.Member):
-    embed = discord.Embed(description=f"💢 {ctx.author.mention} is bullying {target.mention}! Mean...", color=0x34495E)
-    await ctx.send(embed=embed)
-
+async def bully_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "bully")
+@bot.command(name="bonk")
+async def bonk_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "bonk")
+@bot.command(name="stab")
+async def stab_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "stab")
+@bot.command(name="yeet")
+async def yeet_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "yeet")
+@bot.command(name="hug")
+async def hug_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "hug")
+@bot.command(name="kiss")
+async def kiss_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "kiss")
+@bot.command(name="cuddle")
+async def cuddle_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "cuddle")
+@bot.command(name="pat", aliases=["headpat"])
+async def pat_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "pat")
+@bot.command(name="highfive", aliases=["h5"])
+async def highfive_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "highfive")
+@bot.command(name="holdhands")
+async def holdhands_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "holdhands")
+@bot.command(name="tickle")
+async def tickle_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "tickle")
+@bot.command(name="nuzzle")
+async def nuzzle_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "nuzzle")
+@bot.command(name="feed")
+async def feed_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "feed")
+@bot.command(name="carry")
+async def carry_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "carry")
+@bot.command(name="sleep")
+async def sleep_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "sleep")
+@bot.command(name="lick")
+async def lick_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "lick")
+@bot.command(name="poke")
+async def poke_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "poke")
+@bot.command(name="comfort")
+async def comfort_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "comfort")
+@bot.command(name="shoot")
+async def shoot_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "shoot")
+@bot.command(name="tackle")
+async def tackle_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "tackle")
+@bot.command(name="wave")
+async def wave_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "wave")
+@bot.command(name="dance")
+async def dance_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "dance")
+# ── MARRIAGE SYSTEM ───────────────────────────
+class MarriageProposalView(discord.ui.View):
+    def __init__(self, requester, target):
+        super().__init__(timeout=60)
+        self.requester = requester
+        self.target = target
+        self.accepted = False
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success, emoji="💍")
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.target:
+            await interaction.response.send_message("❌ This proposal is not for you!", ephemeral=True)
+            return
+        self.accepted = True
+        self.stop()
+        await db.marry(str(self.requester.id), str(self.target.id))
+        embed = discord.Embed(title="💖 Just Married! 💖", description=f"🎊 {self.requester.mention} and {self.target.mention} are now married! 🎊", color=0xFF69B4, timestamp=discord.utils.utcnow())
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger, emoji="💔")
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.target:
+            await interaction.response.send_message("❌ This proposal is not for you!", ephemeral=True)
+            return
+        self.stop()
+        await interaction.response.edit_message(content=f"💔 {self.target.mention} declined the proposal from {self.requester.mention}.", embed=None, view=None)
+@bot.command(name="marry")
+async def marry_cmd(ctx: commands.Context, target: discord.Member):
+    if target == ctx.author: return await ctx.send("❌ You can't marry yourself!")
+    m1 = await db.get_marriage(str(ctx.author.id))
+    if m1: return await ctx.send("❌ You are already married!")
+    m2 = await db.get_marriage(str(target.id))
+    if m2: return await ctx.send("❌ They are already married!")
+    view = MarriageProposalView(ctx.author, target)
+    await ctx.send(f"💍 {target.mention}, **{ctx.author.name}** has proposed to you! Do you accept?", view=view)
+@bot.command(name="divorce")
+async def divorce_cmd(ctx: commands.Context):
+    p_id = await db.get_marriage(str(ctx.author.id))
+    if not p_id: return await ctx.send("❌ You are not married!")
+    await db.divorce(str(ctx.author.id), str(p_id))
+    await ctx.send("💔 You are now divorced.")
+@bot.command(name="marriage")
+async def marriage_cmd(ctx: commands.Context, member: discord.Member = None):
+    member = member or ctx.author
+    p_id = await db.get_marriage(str(member.id))
+    if not p_id: return await ctx.send(f"💔 **{member.display_name}** is single.")
+    await ctx.send(f"💖 **{member.mention}** is married to <@{p_id}>!")
+# ── LIFE & DEATH ──────────────────────────────
+@bot.command(name="kill")
+async def kill_cmd(ctx: commands.Context, target: discord.Member):
+    if target == ctx.author: return await ctx.send("❌ You can't kill yourself!")
+    reasons = ["slipped on a banana peel.", "forgot how to breathe.", "was hit by a falling piano"]
+    import random
+    reason = random.choice(reasons)
+    await db.set_life_status(str(target.id), False)
+    await ctx.send(f"💀 {target.mention} has been killed by {ctx.author.mention}! Reason: {reason}")
+@bot.command(name="revive")
+async def revive_cmd(ctx: commands.Context, target: discord.Member):
+    await db.set_life_status(str(target.id), True)
+    await ctx.send(f"✨ {target.mention} has been brought back to life!")
 # ── QUEST SYSTEM ─────────────────────────────
 
 QUEST_TEMPLATES = [
