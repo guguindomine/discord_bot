@@ -136,9 +136,9 @@ HEIST_TARGETS = {
 COMMAND_COOLDOWNS = {
     "daily": 86400,
     "work": 300,
-    "crime": 120,
-    "heist": 3600,
-    "steal": 600,
+    "crime": 60,
+    "heist": 300,
+    "steal": 300,
     "casino": 5
 }
 
@@ -4386,6 +4386,20 @@ async def heist_cmd(ctx: commands.Context):
     view = HeistTargetView(ctx)
     await msg.edit(content=None, embed=embed, view=view)
     await db.set_cooldown(user_id, "heist", datetime.now())
+
+@bot.command(name="resetcd")
+@commands.is_owner()
+async def reset_cooldowns_cmd(ctx: commands.Context):
+    """Admin command to reset all your cooldowns (Owner only)."""
+    user_id = str(ctx.author.id)
+    # Clear common cooldowns in the database
+    for key in ["heist", "work", "crime", "steal", "daily"]:
+        await db.set_cooldown(user_id, key, datetime.now() - timedelta(days=1))
+    
+    # Also clear jail if present
+    await db.set_cooldown(user_id, "jail", datetime.now() - timedelta(days=1))
+    
+    await ctx.send("✅ **Cooldowns and Jail status have been reset!** Go wild.")
 
 @bot.command(name="crime")
 async def crime_cmd(ctx: commands.Context):
