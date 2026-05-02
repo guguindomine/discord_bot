@@ -2953,20 +2953,111 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
 
 active_poker_games = {}
 
+def evaluate_poker_hand(hole_cards, community_cards):
+    """Evaluate poker hand and return (rank, description)."""
+    all_cards = hole_cards + community_cards
+    ranks = []
+    suits = []
+    for card in all_cards:
+        rank = card[:-1]
+        suit = card[-1]
+        if rank == 'A': ranks.append(14)
+        elif rank == 'K': ranks.append(13)
+        elif rank == 'Q': ranks.append(12)
+        elif rank == 'J': ranks.append(11)
+        else: ranks.append(int(rank))
+        suits.append(suit)
+    
+    # Count frequencies
+    rank_counts = {}
+    suit_counts = {}
+    for r, s in zip(ranks, suits):
+        rank_counts[r] = rank_counts.get(r, 0) + 1
+        suit_counts[s] = suit_counts.get(s, 0) + 1
+    
+    # Check for flush
+    flush = any(count >= 5 for count in suit_counts.values())
+    flush_suit = next((s for s, c in suit_counts.items() if c >= 5), None) if flush else None
+    
+    # Check for straight
+    sorted_ranks = sorted(set(ranks), reverse=True)
+    straight = False
+    straight_high = 0
+    for i in range(len(sorted_ranks) - 4):
+        if sorted_ranks[i] - sorted_ranks[i+4] == 4:
+            straight = True
+            straight_high = sorted_ranks[i]
+            break
+    # Ace low straight
+    if set([14, 2, 3, 4, 5]).issubset(set(ranks)):
+        straight = True
+        straight_high = 5
+    
+    # Royal flush
+    if flush and straight and straight_high == 14 and all(r in ranks for r in [10,11,12,13,14]) and all(suits[i] == flush_suit for i, r in enumerate(ranks) if r in [10,11,12,13,14]):
+        return (10, "Royal Flush")
+    
+    # Straight flush
+    if flush and straight:
+        return (9, f"Straight Flush ({straight_high})")
+    
+    # Four of a kind
+    if 4 in rank_counts.values():
+        quad = next(r for r, c in rank_counts.items() if c == 4)
+        return (8, f"Four of a Kind ({quad})")
+    
+    # Full house
+    if 3 in rank_counts.values() and 2 in rank_counts.values():
+        trips = next(r for r, c in rank_counts.items() if c == 3)
+        pair = next(r for r, c in rank_counts.items() if c == 2)
+        return (7, f"Full House ({trips} over {pair})")
+    
+    # Flush
+    if flush:
+        flush_cards = sorted([r for r, s in zip(ranks, suits) if s == flush_suit], reverse=True)[:5]
+        return (6, f"Flush ({flush_cards[0]})")
+    
+    # Straight
+    if straight:
+        return (5, f"Straight ({straight_high})")
+    
+    # Three of a kind
+    if 3 in rank_counts.values():
+        trips = next(r for r, c in rank_counts.items() if c == 3)
+        return (4, f"Three of a Kind ({trips})")
+    
+    # Two pair
+    pairs = [r for r, c in rank_counts.items() if c == 2]
+    if len(pairs) >= 2:
+        pairs.sort(reverse=True)
+        return (3, f"Two Pair ({pairs[0]} and {pairs[1]})")
+    
+    # One pair
+    if 2 in rank_counts.values():
+        pair = next(r for r, c in rank_counts.items() if c == 2)
+        return (2, f"One Pair ({pair})")
+    
+    # High card
+    high = max(ranks)
+    return (1, f"High Card ({high})")
+
 class PokerGame:
     def __init__(self, ctx, min_buyin, max_buyin):
         self.ctx = ctx
         self.min_buyin = min_buyin
         self.max_buyin = max_buyin
-        self.players = {}  # user_id: {'buyin': amount, 'cards': [], 'folded': False}
+        self.players = {}  # user_id: {'buyin': amount, 'cards': [], 'folded': False, 'bet': 0, 'chips': amount}
         self.deck = self.create_deck()
         self.community_cards = []
         self.pot = 0
         self.current_bet = 0
         self.dealer_pos = 0
-        self.current_player = 0
+        self.current_player_index = 0
         self.round = 'waiting'  # waiting, preflop, flop, turn, river, showdown
         self.message = None
+        self.view = None
+        self.last_raiser = None
+        self.betting_round_complete = False
 
     def create_deck(self):
         suits = ['♠', '♥', '♦', '♣']
@@ -2980,7 +3071,7 @@ class PokerGame:
             return False
         if not (self.min_buyin <= buyin <= self.max_buyin):
             return False
-        self.players[user_id] = {'buyin': buyin, 'cards': [], 'folded': False, 'bet': 0}
+        self.players[user_id] = {'buyin': buyin, 'cards': [], 'folded': False, 'bet': 0, 'chips': buyin}
         self.pot += buyin
         return True
 
@@ -2991,54 +3082,198 @@ class PokerGame:
         for player in self.players.values():
             player['cards'] = [self.deck.pop(), self.deck.pop()]
         self.round = 'preflop'
-        self.current_player = (self.dealer_pos + 1) % len(self.players)
+        self.current_player_index = (self.dealer_pos + 1) % len(self.players)
+        self.current_bet = 0
+        self.last_raiser = None
+        self.betting_round_complete = False
         return True
 
-    def evaluate_hand(self, hole_cards, community):
-        # Simple hand evaluation - just high card for now
-        all_cards = hole_cards + community
-        ranks = []
-        for card in all_cards:
-            rank = card[:-1]
-            if rank == 'A': ranks.append(14)
-            elif rank == 'K': ranks.append(13)
-            elif rank == 'Q': ranks.append(12)
-            elif rank == 'J': ranks.append(11)
-            else: ranks.append(int(rank))
-        return max(ranks)
+    def get_current_player_id(self):
+        player_ids = list(self.players.keys())
+        return player_ids[self.current_player_index]
 
-    def get_winner(self):
+    def next_player(self):
+        self.current_player_index = (self.current_player_index + 1) % len(self.players)
+        # Skip folded players
+        while self.players[self.get_current_player_id()]['folded']:
+            self.current_player_index = (self.current_player_index + 1) % len(self.players)
+
+    def advance_round(self):
+        if self.round == 'preflop':
+            self.community_cards = [self.deck.pop() for _ in range(3)]  # Flop
+            self.round = 'flop'
+        elif self.round == 'flop':
+            self.community_cards.append(self.deck.pop())  # Turn
+            self.round = 'turn'
+        elif self.round == 'turn':
+            self.community_cards.append(self.deck.pop())  # River
+            self.round = 'river'
+        elif self.round == 'river':
+            self.round = 'showdown'
+        self.current_bet = 0
+        self.last_raiser = None
+        self.betting_round_complete = False
+        self.current_player_index = (self.dealer_pos + 1) % len(self.players)
+
+    def get_winners(self):
         active_players = {uid: p for uid, p in self.players.items() if not p['folded']}
         if not active_players:
-            return None
-        scores = {}
+            return []
+        hands = {}
         for uid, p in active_players.items():
-            scores[uid] = self.evaluate_hand(p['cards'], self.community_cards)
-        winner = max(scores, key=scores.get)
-        return winner
+            hands[uid] = evaluate_poker_hand(p['cards'], self.community_cards)
+        max_rank = max(h[0] for h in hands.values())
+        winners = [uid for uid, h in hands.items() if h[0] == max_rank]
+        return winners, hands
+
+    def check_betting_complete(self):
+        active_players = [p for p in self.players.values() if not p['folded']]
+        if len(active_players) <= 1:
+            return True
+        for p in active_players:
+            if p['bet'] != self.current_bet:
+                return False
+        return True
+
+    def check_betting_complete(self):
+        active_players = [p for p in self.players.values() if not p['folded']]
+        if len(active_players) <= 1:
+            return True
+        for p in active_players:
+            if p['bet'] != self.current_bet:
+                return False
+        return True
+
+    async def update_embed(self):
+        embed = discord.Embed(title="🃏 Paradox Poker", color=0x34495E)
+        embed.add_field(name="Round", value=self.round.capitalize(), inline=True)
+        embed.add_field(name="Pot", value=f"{self.pot:,} {CURRENCY_NAME}", inline=True)
+        embed.add_field(name="Current Bet", value=f"{self.current_bet:,} {CURRENCY_NAME}", inline=True)
+        if self.community_cards:
+            embed.add_field(name="Community Cards", value=" ".join(self.community_cards), inline=False)
+        players_text = ""
+        for uid, p in self.players.items():
+            status = "Folded" if p['folded'] else f"Bet: {p['bet']:,} | Chips: {p['chips']:,}"
+            players_text += f"<@{uid}>: {status}\n"
+        embed.add_field(name="Players", value=players_text, inline=False)
+        current_player = self.get_current_player_id()
+        embed.add_field(name="Current Turn", value=f"<@{current_player}>", inline=False)
+        self.view = PokerView(self)
+        await self.message.edit(embed=embed, view=self.view)
 
 class PokerView(discord.ui.View):
     def __init__(self, game):
         super().__init__(timeout=300)
         self.game = game
 
-    @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
-    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass
-
     @discord.ui.button(label="Fold", style=discord.ButtonStyle.red)
     async def fold_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass
+        await self.handle_action(interaction, 'fold')
 
-    @discord.ui.button(label="Call", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Check/Call", style=discord.ButtonStyle.blurple)
     async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass
+        await self.handle_action(interaction, 'call')
 
-    @discord.ui.button(label="Raise", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="Raise", style=discord.ButtonStyle.green)
     async def raise_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        pass
+        # Open modal for raise amount
+        modal = RaiseModal(self.game)
+        await interaction.response.send_modal(modal)
+
+    async def handle_action(self, interaction, action):
+        user_id = str(interaction.user.id)
+        if user_id != self.game.get_current_player_id():
+            return await interaction.response.send_message("It's not your turn!", ephemeral=True)
+        
+        player = self.game.players[user_id]
+        if action == 'fold':
+            player['folded'] = True
+            await interaction.response.send_message(f"{interaction.user.mention} folded.", ephemeral=False)
+        elif action == 'call':
+            call_amount = self.game.current_bet - player['bet']
+            if call_amount > player['chips']:
+                return await interaction.response.send_message("Not enough chips!", ephemeral=True)
+            player['bet'] += call_amount
+            player['chips'] -= call_amount
+            self.game.pot += call_amount
+            await interaction.response.send_message(f"{interaction.user.mention} called {call_amount:,} {CURRENCY_NAME}.", ephemeral=False)
+        
+        self.game.next_player()
+        if self.game.check_betting_complete():
+            self.game.advance_round()
+            if self.game.round == 'showdown':
+                winners, hands = self.game.get_winners()
+                if winners:
+                    pot_split = self.game.pot // len(winners)
+                    for winner in winners:
+                        await db.update_balance(winner, pot_split)
+                    winner_names = [f"<@{w}>" for w in winners]
+                    embed = discord.Embed(title="🃏 Poker Results", description=f"Winners: {', '.join(winner_names)}\nEach gets: {pot_split:,} {CURRENCY_NAME}", color=0x2ECC71)
+                    await self.game.message.edit(embed=embed, view=None)
+                    del active_poker_games[self.game.ctx.channel.id]
+                else:
+                    await self.game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C), view=None)
+                    del active_poker_games[self.game.ctx.channel.id]
+            else:
+                await self.game.update_embed()
+        else:
+            await self.game.update_embed()
+        await self.game.send_hand_info(user_id)
+
+class RaiseModal(discord.ui.Modal, title="Raise Amount"):
+    amount = discord.ui.TextInput(label="Amount to raise", placeholder="Enter amount", required=True)
+
+    def __init__(self, game):
+        super().__init__()
+        self.game = game
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            raise_amount = int(self.amount.value)
+        except ValueError:
+            return await interaction.response.send_message("Invalid amount!", ephemeral=True)
+        
+        user_id = str(interaction.user.id)
+        player = self.game.players[user_id]
+        total_bet = self.game.current_bet + raise_amount
+        call_amount = self.game.current_bet - player['bet']
+        total_cost = call_amount + raise_amount
+        
+        if total_cost > player['chips']:
+            return await interaction.response.send_message("Not enough chips!", ephemeral=True)
+        
+        player['bet'] = total_bet
+        player['chips'] -= total_cost
+        self.game.pot += total_cost
+        self.game.current_bet = total_bet
+        self.game.last_raiser = user_id
+        
+        await interaction.response.send_message(f"{interaction.user.mention} raised to {total_bet:,} {CURRENCY_NAME}.", ephemeral=False)
+        
+        self.game.next_player()
+        if self.game.check_betting_complete():
+            self.game.advance_round()
+            if self.game.round == 'showdown':
+                winners, hands = self.game.get_winners()
+                if winners:
+                    pot_split = self.game.pot // len(winners)
+                    for winner in winners:
+                        await db.update_balance(winner, pot_split)
+                    winner_names = [f"<@{w}>" for w in winners]
+                    embed = discord.Embed(title="🃏 Poker Results", description=f"Winners: {', '.join(winner_names)}\nEach gets: {pot_split:,} {CURRENCY_NAME}", color=0x2ECC71)
+                    await self.game.message.edit(embed=embed, view=None)
+                    del active_poker_games[self.game.ctx.channel.id]
+                else:
+                    await self.game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C), view=None)
+                    del active_poker_games[self.game.ctx.channel.id]
+            else:
+                await self.game.update_embed()
+        else:
+            await self.game.update_embed()
+        await self.game.send_hand_info(user_id)
 
 @bot.group(name="poker", invoke_without_command=True)
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def poker_cmd(ctx: commands.Context, min_buyin: int = None, max_buyin: int = None):
     """Start a poker game with buy-in limits or show poker usage."""
     if min_buyin is None or max_buyin is None:
@@ -3066,10 +3301,12 @@ async def poker_cmd(ctx: commands.Context, min_buyin: int = None, max_buyin: int
     game.message = msg
 
 @poker_cmd.command(name="join")
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def poker_join_subcmd(ctx: commands.Context, amount: int):
     return await poker_join_handler(ctx, amount)
 
 @bot.command(name="pokerjoin")
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def poker_join_cmd(ctx: commands.Context, amount: int):
     return await poker_join_handler(ctx, amount)
 
@@ -3100,10 +3337,12 @@ async def poker_join_handler(ctx: commands.Context, amount: int):
         await ctx.send("❌ Failed to join.")
 
 @poker_cmd.command(name="start")
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def poker_start_subcmd(ctx: commands.Context):
     return await poker_start_handler(ctx)
 
 @bot.command(name="pokerstart")
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def poker_start_cmd(ctx: commands.Context):
     return await poker_start_handler(ctx)
 
