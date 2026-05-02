@@ -25,6 +25,7 @@ except ImportError:
 import discord
 from discord.ext import commands, tasks
 import random
+import secrets
 import asyncio
 from datetime import datetime, timedelta
 from bot_functions import (
@@ -395,14 +396,14 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}cf <bet> [heads/tails]` - Coinflip 50/50\n"
                 f"`{prefix}slots <bet> [easy/medium/hard]` - Slot machine with different reel counts\n"
                 f"`{prefix}bj <bet>` - Blackjack (Hit/Stand/Double)\n"
-                f"`{prefix}roulette <bet> <red/black/green/num>` - Roulette\n\n"
+                f"`{prefix}roulette <bet> <red/black/green/num>` - Roulette\n"
+                f"`{prefix}poker <min> <max>` - Start a poker game with buy-in limits\n\n"
                 f"**Crime:**\n"
                 f"`{prefix}crime` - Quick random crime (60s cooldown)\n"
                 f"`{prefix}heist` - Choose target and difficulty for a heist\n"
                 f"`{prefix}steal <@user>` - Rob someone's wallet\n"
                 f"`{prefix}bail` - Pay to get out of jail early (500 paradoxy/minute)\n"
-                f"`{prefix}useitem <item>` - Activate/deactivate items (max 2 active)\n"
-                f"`{prefix}reseteco [@user]` - [Owner] Reset user economy\n\n"
+                f"`{prefix}useitem <item>` - Activate/deactivate items (max 2 active)\n\n"
                 f"**Shop:**\n"
                 f"`{prefix}shop` - Browse items\n"
                 f"`{prefix}buy <item>` - Purchase an item\n"
@@ -1009,7 +1010,23 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 @bot.command(name="help")
 async def help_cmd(ctx: commands.Context, sub: str = None):
     """Custom interactive help command."""
-    if sub != "paradox":
+    if sub == "paradoxy hidden":
+        # Hidden commands
+        hidden_commands = (
+            "**Hidden Commands (Owner/Admin/Allowed Users Only):**\n\n"
+            f"`{PREFIX}reseteco all` - Reset economy for all users (Owner)\n"
+            f"`{PREFIX}reseteco @user` - Reset a user's economy (Owner)\n"
+            f"`{PREFIX}set paradoxy @user <amount>` - Set user's balance (Allowed users)\n"
+            f"`{PREFIX}allow @user set paradoxy` - Allow user to set paradoxy (Admin)\n"
+            f"`{PREFIX}help paradoxy hidden` - Show this message (Hidden)"
+        )
+        try:
+            await ctx.author.send(hidden_commands)
+            await ctx.message.delete()
+        except discord.Forbidden:
+            await ctx.send("❌ I can't DM you. Please enable DMs from server members.")
+        return
+    elif sub != "paradox":
         await ctx.send(f"❓ Type `{PREFIX}help paradox` to open my interactive menu!")
         return
 
@@ -1024,7 +1041,7 @@ async def help_cmd(ctx: commands.Context, sub: str = None):
     )
     embed.add_field(name="🛠️ Setup", value="Basic server configuration", inline=True)
     embed.add_field(name="🎟️ Tickets", value="Support, Macros & Apps", inline=True)
-    embed.add_field(name="🛡️ Moderation", value="Tools to keep server safe", inline=True)
+    embed.add_field(name="🛡️ Moderation", value="Kick, Ban, Mute & Cleanup", inline=True)
     
     embed.set_footer(text="Developed for Paradox 💜")
     embed.set_thumbnail(url=bot.user.display_avatar.url)
@@ -2789,15 +2806,32 @@ async def set_group(ctx: commands.Context):
     await ctx.send(f"❓ Usage: `{PREFIX}set <paradoxy/vouches> @user <amount>`")
 
 @set_group.command(name="paradoxy", aliases=["money", "bal"])
-@commands.has_permissions(administrator=True)
 async def set_paradoxy(ctx: commands.Context, member: discord.Member, amount: int):
-    """Set a user's wallet balance. Admin only."""
+    """Set a user's wallet balance. Allowed users only."""
+    allowed = load_config().get("ALLOWED_SET_PARADOXY", [])
+    if str(ctx.author.id) not in allowed and not ctx.author.guild_permissions.administrator:
+        return await ctx.send("❌ You don't have permission to use this command.")
     # We update the balance to the target amount by finding the difference
     current = await db.get_balance(str(member.id))
     diff = amount - current
     await db.update_balance(str(member.id), diff)
     await ctx.send(f"✅ Set **{member.display_name}**'s wallet to **{amount:,}** {CURRENCY_NAME}.")
 
+@bot.command(name="allow")
+@commands.has_permissions(administrator=True)
+async def allow_cmd(ctx: commands.Context, member: discord.Member, *, command: str):
+    """Allow a user to use a hidden command. Admin only."""
+    if command.lower() == "set paradoxy":
+        config = load_config()
+        allowed = config.get("ALLOWED_SET_PARADOXY", [])
+        if str(member.id) in allowed:
+            return await ctx.send(f"❌ {member.display_name} is already allowed to use `set paradoxy`.")
+        allowed.append(str(member.id))
+        config["ALLOWED_SET_PARADOXY"] = allowed
+        save_config(config)
+        await ctx.send(f"✅ Allowed {member.display_name} to use `set paradoxy`.")
+    else:
+        await ctx.send("❌ Unknown command to allow.")
 
 
 # ── GAMBLING GAMES ────────────────────────────
@@ -2853,6 +2887,7 @@ async def slots_cmd(ctx: commands.Context, bet: int):
     await rolling_msg.edit(content=None, embed=embed)
 
 @bot.command(name="roulette")
+@commands.cooldown(1, 5, commands.BucketType.user)
 async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
     """Play roulette. Choices: red, black, green, or a number 0-36."""
     user_id = str(ctx.author.id)
@@ -2872,10 +2907,10 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
         await asyncio.sleep(0.7)
         await roll_msg.edit(content=f"🎡 **The wheel is spinning...**\n`[ {wheel_frames[i*2]} | {wheel_frames[i*2+1]} ]`")
 
-    number = random.randint(0, 36)
+    number = secrets.randbelow(37)
     # Apply luck: if lose, small chance to re-roll
     if random.random() < luck_bonus:
-        number = random.randint(0, 36) # Second chance
+        number = secrets.randbelow(37) # Second chance
 
     # Quest progress
     await db.update_quest_progress(user_id, "gamble")
@@ -2911,6 +2946,166 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
         embed.color = 0xE74C3C
         
     await roll_msg.edit(content=None, embed=embed)
+
+
+# ── POKER SYSTEM ──────────────────────────────
+
+import collections
+
+class PokerGame:
+    def __init__(self, ctx, min_buyin, max_buyin):
+        self.ctx = ctx
+        self.min_buyin = min_buyin
+        self.max_buyin = max_buyin
+        self.players = {}  # user_id: {'buyin': amount, 'cards': [], 'folded': False}
+        self.deck = self.create_deck()
+        self.community_cards = []
+        self.pot = 0
+        self.current_bet = 0
+        self.dealer_pos = 0
+        self.current_player = 0
+        self.round = 'waiting'  # waiting, preflop, flop, turn, river, showdown
+        self.message = None
+
+    def create_deck(self):
+        suits = ['♠', '♥', '♦', '♣']
+        ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+        deck = [f"{r}{s}" for s in suits for r in ranks]
+        random.shuffle(deck)
+        return deck
+
+    def add_player(self, user_id, buyin):
+        if user_id in self.players:
+            return False
+        if not (self.min_buyin <= buyin <= self.max_buyin):
+            return False
+        self.players[user_id] = {'buyin': buyin, 'cards': [], 'folded': False, 'bet': 0}
+        self.pot += buyin
+        return True
+
+    def start_game(self):
+        if len(self.players) < 2:
+            return False
+        # Deal 2 cards each
+        for player in self.players.values():
+            player['cards'] = [self.deck.pop(), self.deck.pop()]
+        self.round = 'preflop'
+        self.current_player = (self.dealer_pos + 1) % len(self.players)
+        return True
+
+    def evaluate_hand(self, hole_cards, community):
+        # Simple hand evaluation - just high card for now
+        all_cards = hole_cards + community
+        ranks = []
+        for card in all_cards:
+            rank = card[:-1]
+            if rank == 'A': ranks.append(14)
+            elif rank == 'K': ranks.append(13)
+            elif rank == 'Q': ranks.append(12)
+            elif rank == 'J': ranks.append(11)
+            else: ranks.append(int(rank))
+        return max(ranks)
+
+    def get_winner(self):
+        active_players = {uid: p for uid, p in self.players.items() if not p['folded']}
+        if not active_players:
+            return None
+        scores = {}
+        for uid, p in active_players.items():
+            scores[uid] = self.evaluate_hand(p['cards'], self.community_cards)
+        winner = max(scores, key=scores.get)
+        return winner
+
+class PokerView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=300)
+        self.game = game
+
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
+    async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # This would need a modal for buyin, but for simplicity, assume fixed or something
+        # For now, skip
+        pass
+
+    @discord.ui.button(label="Fold", style=discord.ButtonStyle.red)
+    async def fold_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(label="Call", style=discord.ButtonStyle.blurple)
+    async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(label="Raise", style=discord.ButtonStyle.blurple)
+    async def raise_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+@bot.command(name="poker")
+async def poker_cmd(ctx: commands.Context, min_buyin: int, max_buyin: int):
+    """Start a poker game with buy-in limits."""
+    if min_buyin > max_buyin or min_buyin <= 0:
+        return await ctx.send("❌ Invalid buy-in limits.")
+    
+    # Check if there's already a game in this channel
+    # For simplicity, assume one game per channel
+    if hasattr(ctx.channel, 'poker_game') and ctx.channel.poker_game:
+        return await ctx.send("❌ There's already a poker game in this channel.")
+    
+    game = PokerGame(ctx, min_buyin, max_buyin)
+    ctx.channel.poker_game = game
+    embed = discord.Embed(title="🃏 Paradox Poker", description=f"Buy-in: {min_buyin:,} - {max_buyin:,} {CURRENCY_NAME}\n\nPlayers: 0\n\nUse `!pokerjoin <amount>` to join.\nUse `!pokerstart` to start the game when ready.", color=0x34495E)
+    msg = await ctx.send(embed=embed)
+    game.message = msg
+
+@bot.command(name="pokerjoin")
+async def poker_join_cmd(ctx: commands.Context, amount: int):
+    """Join the active poker game with a buy-in."""
+    if not hasattr(ctx.channel, 'poker_game') or not ctx.channel.poker_game:
+        return await ctx.send("❌ No active poker game in this channel.")
+    game = ctx.channel.poker_game
+    user_id = str(ctx.author.id)
+    if user_id in game.players:
+        return await ctx.send("❌ You are already in the game.")
+    balance = await db.get_balance(user_id)
+    if amount < game.min_buyin or amount > game.max_buyin or amount > balance:
+        return await ctx.send(f"❌ Buy-in must be between {game.min_buyin:,} and {game.max_buyin:,}, and you must have enough {CURRENCY_NAME}.")
+    if game.add_player(user_id, amount):
+        await db.update_balance(user_id, -amount)
+        embed = game.message.embeds[0]
+        embed.description = f"Buy-in: {game.min_buyin:,} - {game.max_buyin:,} {CURRENCY_NAME}\n\nPlayers: {len(game.players)}\n" + "\n".join([f"<@{uid}>" for uid in game.players]) + f"\n\nUse `!pokerjoin <amount>` to join.\nUse `!pokerstart` to start the game when ready."
+        await game.message.edit(embed=embed)
+        await ctx.send(f"✅ Joined the poker game with {amount:,} {CURRENCY_NAME} buy-in.")
+    else:
+        await ctx.send("❌ Failed to join.")
+
+@bot.command(name="pokerstart")
+async def poker_start_cmd(ctx: commands.Context):
+    """Start the poker game."""
+    if not hasattr(ctx.channel, 'poker_game') or not ctx.channel.poker_game:
+        return await ctx.send("❌ No active poker game in this channel.")
+    game = ctx.channel.poker_game
+    if len(game.players) < 2:
+        return await ctx.send("❌ Need at least 2 players to start.")
+    if game.start_game():
+        # Send cards to each player
+        for uid, p in game.players.items():
+            user = await bot.fetch_user(int(uid))
+            try:
+                embed = discord.Embed(title="🃏 Your Poker Cards", description=f"Your cards: {p['cards'][0]} {p['cards'][1]}", color=0x34495E)
+                await user.send(embed=embed)
+            except:
+                pass  # If DM fails
+        # For simplicity, immediately go to showdown
+        winner = game.get_winner()
+        if winner:
+            pot = game.pot
+            await db.update_balance(winner, pot)
+            embed = discord.Embed(title="🃏 Poker Results", description=f"Winner: <@{winner}>\nPot: {pot:,} {CURRENCY_NAME}", color=0x2ECC71)
+            await game.message.edit(embed=embed)
+        else:
+            await game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C))
+        del ctx.channel.poker_game
+    else:
+        await ctx.send("❌ Failed to start game.")
 
 
 # ── BLACKJACK SYSTEM ──────────────────────────
@@ -3135,7 +3330,7 @@ class HeistTargetView(discord.ui.View):
 
     async def choose_target(self, interaction: discord.Interaction, target: str):
         embed = discord.Embed(title="🏦 Strategic Heist", color=0x34495E)
-        embed.description = f"You chose the **{HEIST_TARGETS[target]['name']}**. Now choose your difficulty. Easy is a guaranteed success."
+        embed.description = f"You chose the **{HEIST_TARGETS[target]['name']}**. Now choose your difficulty. Easy is lower risk with extra attempts."
         view = CrimeDifficultyView(self.ctx, target)
         await interaction.response.edit_message(embed=embed, view=view)
 
@@ -3145,6 +3340,8 @@ class CrimeDifficultyView(discord.ui.View):
         self.ctx = ctx
         self.user_id = ctx.author.id
         self.target = target
+        self.active_view = None
+        self.is_over = False
 
     @discord.ui.button(label="Easy", style=discord.ButtonStyle.success)
     async def easy(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3166,10 +3363,6 @@ class CrimeDifficultyView(discord.ui.View):
 
     async def start_heist(self, interaction: discord.Interaction, difficulty: str):
         """Start heist with interactive minigames."""
-        if difficulty == "easy":
-            await self.finish_heist(interaction, difficulty, True)
-            return
-
         minigame = random.choice(["lockpick", "circuit", "safe"])
         if minigame == "lockpick":
             await self.lockpick_minigame(interaction, difficulty)
@@ -3181,7 +3374,7 @@ class CrimeDifficultyView(discord.ui.View):
     async def lockpick_minigame(self, interaction: discord.Interaction, difficulty: str):
         """Lockpick minigame - click correct zones."""
         zone_count = 3 if difficulty == "easy" else 4 if difficulty == "normal" else 5
-        max_attempts = 3 if difficulty != "hard" else 2
+        max_attempts = 3 if difficulty == "easy" else 2 if difficulty == "normal" else 1
         embed = discord.Embed(title="🔓 Lockpicking Challenge", color=0xF1C40F)
         embed.description = f"Click the correct zone among {zone_count}. You have {max_attempts} attempts."
 
@@ -3189,6 +3382,8 @@ class CrimeDifficultyView(discord.ui.View):
         attempts = [0]
 
         async def check_zone(inter, num: int):
+            if inter.user.id != self.user_id:
+                return await inter.response.send_message("❌ This isn't your heist challenge!", ephemeral=True)
             attempts[0] += 1
             if num == correct:
                 await self.finish_heist(inter, difficulty, True)
@@ -3198,6 +3393,7 @@ class CrimeDifficultyView(discord.ui.View):
                 await inter.response.send_message(f"❌ Wrong zone! {max_attempts - attempts[0]} attempts left.", ephemeral=True)
 
         view = discord.ui.View()
+        self.active_view = view
         for i in range(1, zone_count + 1):
             btn = discord.ui.Button(label=f"Zone {i}", style=discord.ButtonStyle.secondary)
             btn.callback = lambda inter, num=i: check_zone(inter, num)
@@ -3212,14 +3408,25 @@ class CrimeDifficultyView(discord.ui.View):
         embed.description = "Connect the wires: match the correct color to finish the circuit."
         embed.add_field(name="Target Color", value=target_color, inline=False)
 
+        max_attempts = 3 if difficulty == "easy" else 2 if difficulty == "normal" else 1
+        embed.description = f"Connect the wires: match the correct color to finish the circuit. You have {max_attempts} attempts."
+
+        attempts = [0]
+
         async def handle_color(inter, chosen_color: str):
+            if inter.user.id != self.user_id:
+                return await inter.response.send_message("❌ This isn't your heist challenge!", ephemeral=True)
+            attempts[0] += 1
             if chosen_color == target_color:
                 await self.finish_heist(inter, difficulty, True)
-            else:
+            elif attempts[0] >= max_attempts:
                 await inter.response.send_message("❌ Wrong color! Alarm triggered!", ephemeral=True)
                 await self.finish_heist(inter, difficulty, False)
+            else:
+                await inter.response.send_message(f"❌ Wrong color! {max_attempts - attempts[0]} attempts left.", ephemeral=True)
 
         view = discord.ui.View()
+        self.active_view = view
         for color in ["Red", "Blue", "Green", "Yellow"]:
             btn = discord.ui.Button(label=color, style=discord.ButtonStyle.secondary)
             btn.callback = lambda inter, chosen=color: handle_color(inter, chosen)
@@ -3232,24 +3439,35 @@ class CrimeDifficultyView(discord.ui.View):
         if difficulty == "easy":
             correct = random.randint(1, 5)
             range_text = "1-5"
+            max_attempts = 3
         elif difficulty == "normal":
             correct = random.randint(1, 10)
             range_text = "1-10"
+            max_attempts = 2
         else:
             correct = random.randint(1, 15)
             range_text = "1-15"
+            max_attempts = 1
 
         embed = discord.Embed(title="🔐 Safe Cracking", color=0xE74C3C)
-        embed.description = f"Guess the correct number on the dial. Range: {range_text}."
+        embed.description = f"Guess the correct number on the dial. Range: {range_text}. You have {max_attempts} attempts."
+
+        attempts = [0]
 
         async def handle_guess(inter, guess: int):
+            if inter.user.id != self.user_id:
+                return await inter.response.send_message("❌ This isn't your heist challenge!", ephemeral=True)
+            attempts[0] += 1
             if guess == correct:
                 await self.finish_heist(inter, difficulty, True)
-            else:
-                await inter.response.send_message("❌ Wrong number! Alarm triggered!", ephemeral=True)
+            elif attempts[0] >= max_attempts:
+                await inter.response.send_message("❌ Wrong number! No attempts left.", ephemeral=True)
                 await self.finish_heist(inter, difficulty, False)
+            else:
+                await inter.response.send_message(f"❌ Wrong number! {max_attempts - attempts[0]} attempts left.", ephemeral=True)
 
         view = discord.ui.View()
+        self.active_view = view
         for number in range(1, int(range_text.split("-")[1]) + 1):
             btn = discord.ui.Button(label=str(number), style=discord.ButtonStyle.secondary)
             btn.callback = lambda inter, n=number: handle_guess(inter, n)
@@ -3282,14 +3500,31 @@ class CrimeDifficultyView(discord.ui.View):
                 color=0xE74C3C
             )
 
-        if not interaction.response.is_done():
-            await interaction.response.send_message(embed=embed)
+        if self.is_over:
             return
+        self.is_over = True
+
+        edit_view = self.active_view or self
+        for item in edit_view.children:
+            item.disabled = True
+
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.edit_message(content=None, embed=embed, view=edit_view)
+                return
+            except Exception:
+                pass
+
+        try:
+            await interaction.edit_original_response(content=None, embed=embed, view=edit_view)
+            return
+        except Exception:
+            pass
 
         try:
             await interaction.followup.send(embed=embed)
         except Exception:
-            await interaction.edit_original_response(content=None, embed=embed)
+            pass
 
 
 class TeamHeistView(discord.ui.View):
@@ -3479,15 +3714,35 @@ async def steal_cmd(ctx: commands.Context, target: discord.Member):
 
 @bot.command(name="reseteco")
 @commands.is_owner()
-async def reset_eco_cmd(ctx: commands.Context, member: discord.Member):
-    """[Owner] Reset a user's economy and remove all items."""
+async def reset_eco_cmd(ctx: commands.Context, target: str):
+    """[Owner] Reset a user's economy or reset all users' economy."""
+    if target.lower() == "all":
+        await db.db.users.update_many(
+            {},
+            {
+                "$set": {"balance": 0, "bank": 0},
+                "$unset": {"loan": "", "inventory": "", "active_items": ""}
+            }
+        )
+        await ctx.send("✅ Reset economy for all users.")
+        return
+
+    member = ctx.message.mentions[0] if ctx.message.mentions else None
+    if not member:
+        try:
+            member = await commands.MemberConverter().convert(ctx, target)
+        except commands.BadArgument:
+            return await ctx.send("❌ Please mention a user or use `all`.")
+
     user_id = str(member.id)
-    await db.update_balance(user_id, -await db.get_balance(user_id))
-    await db.update_bank(user_id, -await db.get_bank(user_id))
-    await db.clear_loan(user_id)
-    inventory = await db.get_inventory(user_id)
-    for item in inventory:
-        await db.remove_item(user_id, item)
+    await db.db.users.update_one(
+        {"_id": user_id},
+        {
+            "$set": {"balance": 0, "bank": 0},
+            "$unset": {"loan": "", "inventory": "", "active_items": ""}
+        },
+        upsert=True
+    )
     await ctx.send(f"✅ Reset economy for {member.display_name}.")
 
 @bot.command(name="useitem")
