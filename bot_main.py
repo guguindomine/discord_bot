@@ -4411,6 +4411,47 @@ async def reset_cooldowns_cmd(ctx: commands.Context):
     
     await ctx.send("✅ **Cooldowns and Jail status have been reset!** Go wild.")
 
+@bot.command(name="reseteco")
+@commands.is_owner()
+async def reset_eco_cmd(ctx: commands.Context, target: str = None):
+    """Reset the economy for all users or a specific user (Owner only)."""
+    if target == "all":
+        # Confirmation check to prevent accidental wipes
+        confirm_msg = await ctx.send("⚠️ **WARNING:** You are about to wipe the economy for **ALL** users. Type `CONFIRM` in 10s to proceed.")
+        
+        def check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and m.content == "CONFIRM"
+            
+        try:
+            await bot.wait_for("message", check=check, timeout=10.0)
+        except asyncio.TimeoutError:
+            return await confirm_msg.edit(content="❌ **Reset cancelled.** You didn't confirm in time.")
+
+        await db.db.users.update_many({}, {
+            "$set": {
+                "balance": 0,
+                "bank": 0,
+                "inventory": [],
+                "quests": {},
+                "loan": {}
+            }
+        })
+        await ctx.send("💥 **ECONOMY RESET!** All balances, banks, and inventories have been wiped for everyone.")
+    elif target and (target.startswith("<@") or target.isdigit()):
+        user_id = target.strip("<@!>")
+        await db.db.users.update_one({"_id": user_id}, {
+            "$set": {
+                "balance": 0,
+                "bank": 0,
+                "inventory": [],
+                "quests": {},
+                "loan": {}
+            }
+        })
+        await ctx.send(f"🧹 **Economy reset for <@{user_id}>.**")
+    else:
+        await ctx.send(f"❓ Usage: `{PREFIX}reseteco all` or `{PREFIX}reseteco @user`.")
+
 @bot.command(name="crime")
 async def crime_cmd(ctx: commands.Context):
     """Commit a quick random crime for fast cash."""
