@@ -1091,8 +1091,6 @@ async def help_cmd(ctx: commands.Context, *sub: str):
             "**Hidden Commands (Owner/Admin/Allowed Users Only):**\n\n"
             f"`{PREFIX}reseteco all` - Reset economy for all users (Owner)\n"
             f"`{PREFIX}reseteco @user` - Reset a user's economy (Owner)\n"
-            f"`{PREFIX}set paradoxy @user <amount>` - Set user's balance (Allowed users)\n"
-            f"`{PREFIX}allow @user set paradoxy` - Allow user to set paradoxy (Admin)\n"
             f"`{PREFIX}help paradox hidden` - Show this message (Hidden)\n"
             f"`{PREFIX}help paradoxy hidden` - Show this message (Hidden)"
         )
@@ -3140,39 +3138,11 @@ async def leaderboard_cmd(ctx: commands.Context):
     embed.set_footer(text="Total wealth = Wallet + Bank")
     await ctx.send(embed=embed)
 
-@bot.group(name="set", invoke_without_command=True)
-@commands.has_permissions(administrator=True)
-async def set_group(ctx: commands.Context):
-    """Admin command to set user data. Usage: !set <paradoxy/vouches>"""
-    await ctx.send(f"❓ Usage: `{PREFIX}set <paradoxy/vouches> @user <amount>`")
-
-@set_group.command(name="paradoxy", aliases=["money", "bal"])
-async def set_paradoxy(ctx: commands.Context, member: discord.Member, amount: int):
-    """Set a user's wallet balance. Allowed users only."""
-    allowed = load_config().get("ALLOWED_SET_PARADOXY", [])
-    if str(ctx.author.id) not in allowed and not ctx.author.guild_permissions.administrator:
-        return await ctx.send("❌ You don't have permission to use this command.")
-    # We update the balance to the target amount by finding the difference
-    current = await db.get_balance(str(member.id))
-    diff = amount - current
-    await db.update_balance(str(member.id), diff)
-    await ctx.send(f"✅ Set **{member.display_name}**'s wallet to **{amount:,}** {CURRENCY_NAME}.")
-
 @bot.command(name="allow")
 @commands.has_permissions(administrator=True)
 async def allow_cmd(ctx: commands.Context, member: discord.Member, *, command: str):
     """Allow a user to use a hidden command. Admin only."""
-    if command.lower() == "set paradoxy":
-        config = load_config()
-        allowed = config.get("ALLOWED_SET_PARADOXY", [])
-        if str(member.id) in allowed:
-            return await ctx.send(f"❌ {member.display_name} is already allowed to use `set paradoxy`.")
-        allowed.append(str(member.id))
-        config["ALLOWED_SET_PARADOXY"] = allowed
-        save_config(config)
-        await ctx.send(f"✅ Allowed {member.display_name} to use `set paradoxy`.")
-    else:
-        await ctx.send("❌ Unknown command to allow.")
+    await ctx.send("❌ No commands currently available to allow.")
 
 
 # ── GAMBLING GAMES ────────────────────────────
