@@ -4747,8 +4747,6 @@ async def reset_cooldowns_cmd(ctx: commands.Context, target: str = None):
 
 @bot.command(name="reseteco")
 @commands.is_owner()
-@bot.command(name="reseteco")
-@commands.is_owner()
 async def reset_eco_cmd(ctx: commands.Context, target: str = None):
     """Reset the economy for all users or a specific user (Owner only)."""
     if target == "all":
