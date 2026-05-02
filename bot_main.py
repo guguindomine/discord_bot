@@ -4399,17 +4399,34 @@ async def heist_cmd(ctx: commands.Context):
 
 @bot.command(name="resetcd")
 @commands.is_owner()
-async def reset_cooldowns_cmd(ctx: commands.Context):
-    """Admin command to reset all your cooldowns (Owner only)."""
+async def reset_cooldowns_cmd(ctx: commands.Context, target: str = None):
+    """Admin command to reset cooldowns (Owner only)."""
+    past = datetime.now() - timedelta(days=1)
+    
+    if target == "all":
+        # Wipe cooldowns for everyone
+        await db.db.users.update_many({}, {
+            "$set": {
+                "cooldowns.heist": past,
+                "cooldowns.work": past,
+                "cooldowns.crime": past,
+                "cooldowns.steal": past,
+                "cooldowns.daily": past,
+                "cooldowns.jail": past
+            }
+        })
+        return await ctx.send("✅ **Cooldowns and Jail status have been reset for EVERYONE!**")
+    
+    # Target self or mentioned user
     user_id = str(ctx.author.id)
-    # Clear common cooldowns in the database
-    for key in ["heist", "work", "crime", "steal", "daily"]:
-        await db.set_cooldown(user_id, key, datetime.now() - timedelta(days=1))
+    if target and (target.startswith("<@") or target.isdigit()):
+        user_id = target.strip("<@!>")
     
-    # Also clear jail if present
-    await db.set_cooldown(user_id, "jail", datetime.now() - timedelta(days=1))
+    for key in ["heist", "work", "crime", "steal", "daily", "jail"]:
+        await db.set_cooldown(user_id, key, past)
     
-    await ctx.send("✅ **Cooldowns and Jail status have been reset!** Go wild.")
+    target_msg = f"<@{user_id}>'s" if user_id != str(ctx.author.id) else "Your"
+    await ctx.send(f"✅ **{target_msg} cooldowns and Jail status have been reset!**")
 
 @bot.command(name="reseteco")
 @commands.is_owner()
