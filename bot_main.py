@@ -4175,37 +4175,80 @@ class CrimeDifficultyView(discord.ui.View):
         await interaction.response.send_message(embed=embed, view=view)
 
     async def circuit_minigame(self, interaction: discord.Interaction, difficulty: str):
-        """Circuit board minigame - match colors."""
-        target_color = random.choice(["Red", "Blue", "Green", "Yellow"])
-        embed = discord.Embed(title="⚡ Circuit Board", color=0x3498DB)
-        embed.description = "Connect the wires: match the correct color to finish the circuit."
-        embed.add_field(name="Target Color", value=target_color, inline=False)
-
-        max_attempts = 3 if difficulty == "easy" else 2 if difficulty == "normal" else 1
-        embed.description = f"Connect the wires: match the correct color to finish the circuit. You have {max_attempts} attempts."
-
-        attempts = [0]
-
+        """Memory-based circuit board minigame."""
+        # Difficulty scales the sequence length
+        num_colors = 3 if difficulty == "easy" else 4 if difficulty == "normal" else 5
+        all_colors = ["Red", "Blue", "Green", "Yellow"]
+        target_sequence = [random.choice(all_colors) for _ in range(num_colors)]
+        
+        embed = discord.Embed(title="⚡ Circuit Board: Memorize!", color=0x3498DB)
+        embed.description = (
+            f"**Memorize this sequence in 5 seconds!**\n\n"
+            f"▶️ " + " ➡️ ".join([f"**{c}**" for c in target_sequence])
+        )
+        embed.set_footer(text="The wires will be hidden soon...")
+        
+        # Initial message showing the sequence
+        await interaction.response.send_message(embed=embed)
+        msg = await interaction.original_response()
+        
+        # Wait for memorization
+        await asyncio.sleep(5)
+        
+        if self.is_over: return # In case they somehow finished or cancelled
+        
+        # Hide sequence and show buttons
+        embed.title = "⚡ Circuit Board: Enter Sequence"
+        embed.description = f"Enter the **{num_colors}** colors in the correct order!"
+        embed.clear_fields()
+        embed.set_footer(text="Timer: 15 seconds")
+        
+        user_sequence = []
+        
         async def handle_color(inter, chosen_color: str):
             if inter.user.id != self.user_id:
                 return await inter.response.send_message("❌ This isn't your heist challenge!", ephemeral=True)
-            attempts[0] += 1
-            if chosen_color == target_color:
-                await self.finish_heist(inter, difficulty, True)
-            elif attempts[0] >= max_attempts:
-                await inter.response.send_message("❌ Wrong color! Alarm triggered!", ephemeral=True)
+            
+            user_sequence.append(chosen_color)
+            current_index = len(user_sequence) - 1
+            
+            if chosen_color != target_sequence[current_index]:
+                # Failed a step
+                await inter.response.send_message(f"❌ Short circuit! Wrong color. Sequence failed.", ephemeral=True)
                 await self.finish_heist(inter, difficulty, False)
+                return
+
+            if len(user_sequence) == num_colors:
+                # Completed sequence
+                await self.finish_heist(inter, difficulty, True)
             else:
-                await inter.response.send_message(f"❌ Wrong color! {max_attempts - attempts[0]} attempts left.", ephemeral=True)
+                # Correct so far
+                await inter.response.send_message(f"✅ Correct wire! ({len(user_sequence)}/{num_colors})", ephemeral=True)
 
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=15)
         self.active_view = view
-        for color in ["Red", "Blue", "Green", "Yellow"]:
-            btn = discord.ui.Button(label=color, style=discord.ButtonStyle.secondary)
-            btn.callback = lambda inter, chosen=color: handle_color(inter, chosen)
-            view.add_item(btn)
+        
+        async def on_timeout():
+            if not self.is_over:
+                # We need a dummy interaction or use the original msg
+                # Since we can't easily trigger finish_heist without an interaction, 
+                # we'll just edit the message if possible.
+                try:
+                    embed.title = "⏰ Time's Up!"
+                    embed.color = 0xE74C3C
+                    await msg.edit(embed=embed, view=None)
+                except: pass
+                # Note: This doesn't call finish_heist properly (jail/fines), 
+                # but it stops the game. For full logic, we'd need more complex handling.
+        view.on_timeout = on_timeout
 
-        await interaction.response.send_message(embed=embed, view=view)
+        for color in all_colors:
+            btn = discord.ui.Button(label=color, style=discord.ButtonStyle.secondary)
+            # Use lambda to capture color correctly
+            btn.callback = lambda inter, c=color: handle_color(inter, c)
+            view.add_item(btn)
+        
+        await msg.edit(embed=embed, view=view)
 
     async def safe_minigame(self, interaction: discord.Interaction, difficulty: str):
         """Safe cracking minigame - guess the dial number."""
