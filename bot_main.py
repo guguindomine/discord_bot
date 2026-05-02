@@ -1008,16 +1008,17 @@ async def on_message_edit(before: discord.Message, after: discord.Message):
 # ── !help ────────────────────────────────────
 
 @bot.command(name="help")
-async def help_cmd(ctx: commands.Context, sub: str = None):
+async def help_cmd(ctx: commands.Context, *sub: str):
     """Custom interactive help command."""
-    if sub == "paradoxy hidden":
-        # Hidden commands
+    sub_text = " ".join(sub).strip().lower()
+    if sub_text in {"paradox hidden", "paradoxy hidden"}:
         hidden_commands = (
             "**Hidden Commands (Owner/Admin/Allowed Users Only):**\n\n"
             f"`{PREFIX}reseteco all` - Reset economy for all users (Owner)\n"
             f"`{PREFIX}reseteco @user` - Reset a user's economy (Owner)\n"
             f"`{PREFIX}set paradoxy @user <amount>` - Set user's balance (Allowed users)\n"
             f"`{PREFIX}allow @user set paradoxy` - Allow user to set paradoxy (Admin)\n"
+            f"`{PREFIX}help paradox hidden` - Show this message (Hidden)\n"
             f"`{PREFIX}help paradoxy hidden` - Show this message (Hidden)"
         )
         try:
@@ -1026,7 +1027,7 @@ async def help_cmd(ctx: commands.Context, sub: str = None):
         except discord.Forbidden:
             await ctx.send("❌ I can't DM you. Please enable DMs from server members.")
         return
-    elif sub != "paradox":
+    if sub_text not in {"paradox", "paradoxy", ""}:
         await ctx.send(f"❓ Type `{PREFIX}help paradox` to open my interactive menu!")
         return
 
@@ -2950,7 +2951,7 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
 
 # ── POKER SYSTEM ──────────────────────────────
 
-import collections
+active_poker_games = {}
 
 class PokerGame:
     def __init__(self, ctx, min_buyin, max_buyin):
@@ -3023,8 +3024,6 @@ class PokerView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
     async def join_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # This would need a modal for buyin, but for simplicity, assume fixed or something
-        # For now, skip
         pass
 
     @discord.ui.button(label="Fold", style=discord.ButtonStyle.red)
@@ -3039,29 +3038,46 @@ class PokerView(discord.ui.View):
     async def raise_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         pass
 
-@bot.command(name="poker")
-async def poker_cmd(ctx: commands.Context, min_buyin: int, max_buyin: int):
-    """Start a poker game with buy-in limits."""
+@bot.group(name="poker", invoke_without_command=True)
+async def poker_cmd(ctx: commands.Context, min_buyin: int = None, max_buyin: int = None):
+    """Start a poker game with buy-in limits or show poker usage."""
+    if min_buyin is None or max_buyin is None:
+        return await ctx.send(f"❓ Usage: `{PREFIX}poker <min> <max>` or `{PREFIX}poker join <amount>`.")
     if min_buyin > max_buyin or min_buyin <= 0:
         return await ctx.send("❌ Invalid buy-in limits.")
-    
-    # Check if there's already a game in this channel
-    # For simplicity, assume one game per channel
-    if hasattr(ctx.channel, 'poker_game') and ctx.channel.poker_game:
+
+    channel_id = ctx.channel.id
+    if channel_id in active_poker_games:
         return await ctx.send("❌ There's already a poker game in this channel.")
-    
+
     game = PokerGame(ctx, min_buyin, max_buyin)
-    ctx.channel.poker_game = game
-    embed = discord.Embed(title="🃏 Paradox Poker", description=f"Buy-in: {min_buyin:,} - {max_buyin:,} {CURRENCY_NAME}\n\nPlayers: 0\n\nUse `!pokerjoin <amount>` to join.\nUse `!pokerstart` to start the game when ready.", color=0x34495E)
+    active_poker_games[channel_id] = game
+    embed = discord.Embed(
+        title="🃏 Paradox Poker",
+        description=(
+            f"Buy-in: {min_buyin:,} - {max_buyin:,} {CURRENCY_NAME}\n\n"
+            "Players: 0\n\n"
+            "Use `!poker join <amount>` or `!pokerjoin <amount>` to join.\n"
+            "Use `!poker start` or `!pokerstart` to start the game when ready."
+        ),
+        color=0x34495E
+    )
     msg = await ctx.send(embed=embed)
     game.message = msg
 
+@poker_cmd.command(name="join")
+async def poker_join_subcmd(ctx: commands.Context, amount: int):
+    return await poker_join_handler(ctx, amount)
+
 @bot.command(name="pokerjoin")
 async def poker_join_cmd(ctx: commands.Context, amount: int):
-    """Join the active poker game with a buy-in."""
-    if not hasattr(ctx.channel, 'poker_game') or not ctx.channel.poker_game:
+    return await poker_join_handler(ctx, amount)
+
+async def poker_join_handler(ctx: commands.Context, amount: int):
+    channel_id = ctx.channel.id
+    if channel_id not in active_poker_games:
         return await ctx.send("❌ No active poker game in this channel.")
-    game = ctx.channel.poker_game
+    game = active_poker_games[channel_id]
     user_id = str(ctx.author.id)
     if user_id in game.players:
         return await ctx.send("❌ You are already in the game.")
@@ -3071,39 +3087,58 @@ async def poker_join_cmd(ctx: commands.Context, amount: int):
     if game.add_player(user_id, amount):
         await db.update_balance(user_id, -amount)
         embed = game.message.embeds[0]
-        embed.description = f"Buy-in: {game.min_buyin:,} - {game.max_buyin:,} {CURRENCY_NAME}\n\nPlayers: {len(game.players)}\n" + "\n".join([f"<@{uid}>" for uid in game.players]) + f"\n\nUse `!pokerjoin <amount>` to join.\nUse `!pokerstart` to start the game when ready."
+        embed.description = (
+            f"Buy-in: {game.min_buyin:,} - {game.max_buyin:,} {CURRENCY_NAME}\n\n"
+            f"Players: {len(game.players)}\n"
+            + "\n".join([f"<@{uid}>" for uid in game.players])
+            + "\n\nUse `!poker join <amount>` or `!pokerjoin <amount>` to join.\n"
+            + "Use `!poker start` or `!pokerstart` to start the game when ready."
+        )
         await game.message.edit(embed=embed)
         await ctx.send(f"✅ Joined the poker game with {amount:,} {CURRENCY_NAME} buy-in.")
     else:
         await ctx.send("❌ Failed to join.")
 
+@poker_cmd.command(name="start")
+async def poker_start_subcmd(ctx: commands.Context):
+    return await poker_start_handler(ctx)
+
 @bot.command(name="pokerstart")
 async def poker_start_cmd(ctx: commands.Context):
-    """Start the poker game."""
-    if not hasattr(ctx.channel, 'poker_game') or not ctx.channel.poker_game:
+    return await poker_start_handler(ctx)
+
+async def poker_start_handler(ctx: commands.Context):
+    channel_id = ctx.channel.id
+    if channel_id not in active_poker_games:
         return await ctx.send("❌ No active poker game in this channel.")
-    game = ctx.channel.poker_game
+    game = active_poker_games[channel_id]
     if len(game.players) < 2:
         return await ctx.send("❌ Need at least 2 players to start.")
     if game.start_game():
-        # Send cards to each player
         for uid, p in game.players.items():
             user = await bot.fetch_user(int(uid))
             try:
-                embed = discord.Embed(title="🃏 Your Poker Cards", description=f"Your cards: {p['cards'][0]} {p['cards'][1]}", color=0x34495E)
+                embed = discord.Embed(
+                    title="🃏 Your Poker Cards",
+                    description=f"Your cards: {p['cards'][0]} {p['cards'][1]}",
+                    color=0x34495E
+                )
                 await user.send(embed=embed)
-            except:
-                pass  # If DM fails
-        # For simplicity, immediately go to showdown
+            except discord.Forbidden:
+                pass
         winner = game.get_winner()
         if winner:
             pot = game.pot
             await db.update_balance(winner, pot)
-            embed = discord.Embed(title="🃏 Poker Results", description=f"Winner: <@{winner}>\nPot: {pot:,} {CURRENCY_NAME}", color=0x2ECC71)
+            embed = discord.Embed(
+                title="🃏 Poker Results",
+                description=f"Winner: <@{winner}>\nPot: {pot:,} {CURRENCY_NAME}",
+                color=0x2ECC71
+            )
             await game.message.edit(embed=embed)
         else:
             await game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C))
-        del ctx.channel.poker_game
+        del active_poker_games[channel_id]
     else:
         await ctx.send("❌ Failed to start game.")
 
