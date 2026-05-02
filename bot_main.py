@@ -75,19 +75,94 @@ bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 CURRENCY_NAME = "paradoxy"
 
 SHOP_ITEMS = {
-    "Lucky Coin": {"price": 1200000, "desc": "Boosts luck by 5% in casino and chance games."},
-    "Golden Clover": {"price": 3500000, "desc": "Boosts luck by 15% in casino and chance games."},
-    "Thief Kit": {"price": 6500000, "desc": "Increase steal success rate by 10%."},
-    "Crime Mask": {"price": 4200000, "desc": "Reduces crime fines by 30%."},
-    "Shield": {"price": 2500000, "desc": "30% chance to block being robbed."},
-    "VIP Pass": {"price": 20000000, "desc": "Increase your daily reward by 50%."},
+    "Lucky Coin": {
+        "price": 1500000,
+        "desc": "Boosts luck by 5% in casino and chance games.",
+        "buff": 1.05
+    },
+    "Golden Clover": {
+        "price": 4500000,
+        "desc": "Boosts luck by 15% in casino and chance games.",
+        "buff": 1.15
+    },
+    "Thief Kit": {
+        "price": 8500000,
+        "desc": "Increase steal success rate by 12%.",
+        "buff": 0.12
+    },
+    "Crime Mask": {
+        "price": 5500000,
+        "desc": "Reduces crime fines by 35% and increases success by 15%.",
+        "buff_fine": 0.65,
+        "buff_success": 0.15
+    },
+    "Shield": {
+        "price": 3500000,
+        "desc": "40% chance to block being robbed.",
+        "buff": 0.40
+    },
+    "VIP Pass": {
+        "price": 35000000,
+        "desc": "75% bonus to daily rewards and 25% bonus to work.",
+        "buff_daily": 1.75,
+        "buff_work": 1.25
+    }
 }
 
 HEIST_TARGETS = {
-    "jewelry": {"name": "Jewelry Store", "easy": (20000, 30000), "normal": (50000, 70000), "hard": (100000, 130000)},
-    "bank": {"name": "Main Bank", "easy": (25000, 35000), "normal": (60000, 85000), "hard": (125000, 160000)},
-    "truck": {"name": "Armored Truck", "easy": (15000, 22500), "normal": (40000, 55000), "hard": (80000, 105000)},
+    "jewelry": {
+        "name": "Jewelry Store",
+        "easy": (30000, 50000),
+        "normal": (70000, 100000),
+        "hard": (150000, 200000),
+        "minigames": ["lockpick", "circuit"]
+    },
+    "bank": {
+        "name": "Main Bank",
+        "easy": (40000, 60000),
+        "normal": (100000, 150000),
+        "hard": (250000, 400000),
+        "minigames": ["safe", "hacking", "circuit"]
+    },
+    "truck": {
+        "name": "Armored Truck",
+        "easy": (25000, 40000),
+        "normal": (60000, 90000),
+        "hard": (120000, 180000),
+        "minigames": ["lockpick", "vault"]
+    }
 }
+
+COMMAND_COOLDOWNS = {
+    "daily": 86400,
+    "work": 300,
+    "crime": 120,
+    "heist": 3600,
+    "steal": 600,
+    "casino": 5
+}
+
+class RiggedOdds:
+    BASE_WIN_RATES = {
+        "cf": 0.48,           # 48% base
+        "slots_normal": 0.35, # 35% for any win
+        "bj": 0.42,           # Blackjack base
+        "roulette_red": 0.47, # Red/Black base
+        "roulette_green": 0.02 # Green base
+    }
+
+    @staticmethod
+    async def calculate_win_chance(game_type, inventory):
+        chance = RiggedOdds.BASE_WIN_RATES.get(game_type, 0.45)
+        
+        # Apply Luck Buffs
+        luck_buff = 0
+        if "Lucky Coin" in inventory: luck_buff += 0.05
+        if "Golden Clover" in inventory: luck_buff += 0.15
+        
+        # Cap max luck buff at 20%
+        final_chance = chance + min(luck_buff, 0.20)
+        return final_chance
 
 # Dynamic interest rate tier probabilities:
 #  80% → normal  (0.1% – 1.3%)
@@ -2344,6 +2419,277 @@ async def migrate_cmd(ctx: commands.Context, arg: str = None):
         await ctx.send("❓ Usage: `!migrate db` (Import to DB) or `!migrate json` (Export to JSON)")
 
 # ══════════════════════════════════════════════
+#  POKER SYSTEM (ADVANCED)
+# ══════════════════════════════════════════════
+
+def evaluate_poker_hand(hole_cards, community_cards):
+    """Evaluate poker hand and return (rank, description)."""
+    all_cards = hole_cards + community_cards
+    ranks = []
+    suits = []
+    for card in all_cards:
+        rank = card[:-1]
+        suit = card[-1]
+        if rank == '10': val = 10
+        elif rank == 'J': val = 11
+        elif rank == 'Q': val = 12
+        elif rank == 'K': val = 13
+        elif rank == 'A': val = 14
+        else: val = int(rank)
+        ranks.append(val)
+        suits.append(suit)
+
+    ranks.sort(reverse=True)
+    
+    # Hand ranking logic
+    is_flush = any(suits.count(s) >= 5 for s in set(suits))
+    
+    unique_ranks = sorted(list(set(ranks)), reverse=True)
+    is_straight = False
+    straight_high = 0
+    for i in range(len(unique_ranks) - 4):
+        if unique_ranks[i] - unique_ranks[i+4] == 4:
+            is_straight = True
+            straight_high = unique_ranks[i]
+            break
+    # Ace-low straight
+    if not is_straight and {14, 2, 3, 4, 5}.issubset(set(ranks)):
+        is_straight = True
+        straight_high = 5
+
+    counts = {r: ranks.count(r) for r in set(ranks)}
+    sorted_counts = sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+    
+    if is_flush and is_straight and straight_high == 14: return (10, "Royal Flush")
+    if is_flush and is_straight: return (9, f"Straight Flush ({straight_high} high)")
+    if sorted_counts[0][1] == 4: return (8, f"Four of a Kind ({sorted_counts[0][0]}s)")
+    if sorted_counts[0][1] == 3 and sorted_counts[1][1] >= 2: return (7, f"Full House ({sorted_counts[0][0]}s over {sorted_counts[1][0]}s)")
+    if is_flush: return (6, "Flush")
+    if is_straight: return (5, f"Straight ({straight_high} high)")
+    if sorted_counts[0][1] == 3: return (4, f"Three of a Kind ({sorted_counts[0][0]}s)")
+    if sorted_counts[0][1] == 2 and sorted_counts[1][1] == 2: return (3, f"Two Pair ({sorted_counts[0][0]}s and {sorted_counts[1][0]}s)")
+    if sorted_counts[0][1] == 2: return (2, f"Pair of {sorted_counts[0][0]}s")
+    return (1, f"High Card ({ranks[0]})")
+
+class PokerGame:
+    def __init__(self, channel_id, min_buyin, max_buyin):
+        self.channel_id = channel_id
+        self.min_buyin = min_buyin
+        self.max_buyin = max_buyin
+        self.players = [] # list of dicts: {id, name, stack, hand, bet, folded, all_in}
+        self.pot = 0
+        self.side_pots = [] # list of dicts: {amount, players_eligible}
+        self.community_cards = []
+        self.deck = []
+        self.current_turn_idx = 0
+        self.round_phase = "pre-flop" # pre-flop, flop, turn, river, showdown
+        self.current_bet = 0
+        self.min_raise = 0
+        self.active = False
+        self.last_action_time = datetime.now()
+
+    def create_deck(self):
+        suits = ['♠', '♥', '♦', '♣']
+        ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+        self.deck = [f"{r}{s}" for r in ranks for s in suits]
+        random.shuffle(self.deck)
+
+class PokerView(discord.ui.View):
+    def __init__(self, game):
+        super().__init__(timeout=600)
+        self.game = game
+
+    @discord.ui.button(label="Join Game", style=discord.ButtonStyle.success)
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Placeholder
+        pass
+
+    @discord.ui.button(label="Check Hand", style=discord.ButtonStyle.secondary)
+    async def check_hand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Placeholder
+        pass
+
+# ══════════════════════════════════════════════
+#  HEIST MINIGAMES
+# ══════════════════════════════════════════════
+
+class LockpickMinigame(discord.ui.View):
+    def __init__(self, user_id, difficulty, callback):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.callback = callback
+        self.zones = 3 if difficulty == "easy" else 5 if difficulty == "normal" else 8
+        self.correct = random.randint(1, self.zones)
+        self.attempts = 3 if difficulty == "easy" else 2 if difficulty == "normal" else 1
+        self.setup_buttons()
+
+    def setup_buttons(self):
+        for i in range(1, self.zones + 1):
+            btn = discord.ui.Button(label="🔒", style=discord.ButtonStyle.secondary, custom_id=str(i))
+            btn.callback = self.check_lock
+            self.add_item(btn)
+
+    async def check_lock(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id: return
+        choice = int(interaction.data['custom_id'])
+        if choice == self.correct:
+            await self.callback(interaction, True)
+        else:
+            self.attempts -= 1
+            if self.attempts <= 0: await self.callback(interaction, False)
+            else: await interaction.response.send_message(f"❌ Wrong pin! {self.attempts} left.", ephemeral=True)
+
+class SafeMinigame(discord.ui.View):
+    def __init__(self, user_id, difficulty, callback):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.callback = callback
+        self.range = 5 if difficulty == "easy" else 10 if difficulty == "normal" else 20
+        self.correct = random.randint(1, self.range)
+        self.setup_buttons()
+
+    def setup_buttons(self):
+        for i in range(1, self.range + 1):
+            btn = discord.ui.Button(label=str(i), style=discord.ButtonStyle.secondary, custom_id=str(i))
+            btn.callback = self.check_safe
+            self.add_item(btn)
+
+    async def check_safe(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id: return
+        choice = int(interaction.data['custom_id'])
+        await self.callback(interaction, choice == self.correct)
+
+class HackingMinigame(discord.ui.View):
+    def __init__(self, user_id, difficulty, callback):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.callback = callback
+        self.codes = ["0x4F", "0x2A", "0x91", "0xBC", "0xE3", "0x7D", "0xA5"]
+        self.target = random.choice(self.codes)
+        self.setup_buttons()
+
+    def setup_buttons(self):
+        random.shuffle(self.codes)
+        for code in self.codes:
+            btn = discord.ui.Button(label=code, style=discord.ButtonStyle.secondary, custom_id=code)
+            btn.callback = self.check_hack
+            self.add_item(btn)
+
+    async def check_hack(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id: return
+        await self.callback(interaction, interaction.data['custom_id'] == self.target)
+
+class VaultMinigame(discord.ui.View):
+    def __init__(self, user_id, difficulty, callback):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.callback = callback
+        seq_len = 3 if difficulty == "easy" else 4 if difficulty == "normal" else 5
+        self.sequence = [random.randint(1, 4) for _ in range(seq_len)]
+        self.player_input = []
+        self.setup_buttons()
+
+    def setup_buttons(self):
+        for i in range(1, 5):
+            btn = discord.ui.Button(label=f"Module {i}", style=discord.ButtonStyle.secondary, custom_id=str(i))
+            btn.callback = self.check_sequence
+            self.add_item(btn)
+
+    async def check_sequence(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id: return
+        choice = int(interaction.data['custom_id'])
+        self.player_input.append(choice)
+        idx = len(self.player_input) - 1
+        if self.player_input[idx] != self.sequence[idx]:
+            await self.callback(interaction, False)
+        elif len(self.player_input) == len(self.sequence):
+            await self.callback(interaction, True)
+        else:
+            await interaction.response.send_message(f"✅ Correct! {len(self.player_input)}/{len(self.sequence)}", ephemeral=True)
+
+class HeistTargetView(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.user_id = ctx.author.id
+
+    @discord.ui.button(label="Jewelry Store", style=discord.ButtonStyle.primary)
+    async def jewelry(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        await self.choose_target(interaction, "jewelry")
+
+    @discord.ui.button(label="Main Bank", style=discord.ButtonStyle.primary)
+    async def bank(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        await self.choose_target(interaction, "bank")
+
+    @discord.ui.button(label="Armored Truck", style=discord.ButtonStyle.primary)
+    async def truck(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        await self.choose_target(interaction, "truck")
+
+    async def choose_target(self, interaction: discord.Interaction, target: str):
+        embed = discord.Embed(title="🏦 Strategic Heist", color=0x34495E)
+        embed.description = f"Target: **{HEIST_TARGETS[target]['name']}**. Choose difficulty:"
+        view = HeistDifficultyView(self.ctx, target)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class HeistDifficultyView(discord.ui.View):
+    def __init__(self, ctx, target: str):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.user_id = ctx.author.id
+        self.target = target
+
+    @discord.ui.button(label="Easy", style=discord.ButtonStyle.success)
+    async def easy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.start_minigame(interaction, "easy")
+
+    @discord.ui.button(label="Normal", style=discord.ButtonStyle.primary)
+    async def normal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.start_minigame(interaction, "normal")
+
+    @discord.ui.button(label="Hard", style=discord.ButtonStyle.danger)
+    async def hard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.start_minigame(interaction, "hard")
+
+    async def start_minigame(self, interaction: discord.Interaction, difficulty: str):
+        if interaction.user.id != self.user_id: return
+        
+        target_info = HEIST_TARGETS[self.target]
+        game_type = random.choice(target_info["minigames"])
+        
+        callback = self.make_callback(difficulty)
+        
+        if game_type == "lockpick": view = LockpickMinigame(self.user_id, difficulty, callback)
+        elif game_type == "safe": view = SafeMinigame(self.user_id, difficulty, callback)
+        elif game_type == "hacking": view = HackingMinigame(self.user_id, difficulty, callback)
+        elif game_type == "vault": view = VaultMinigame(self.user_id, difficulty, callback)
+        else: # Fallback
+            view = HackingMinigame(self.user_id, difficulty, callback)
+
+        await interaction.response.edit_message(content=f"🎯 **MISSION:** Complete the **{game_type.upper()}** challenge!", view=view)
+
+    def make_callback(self, difficulty):
+        async def heist_callback(interaction, success):
+            target_data = HEIST_TARGETS[self.target]
+            base_low, base_high = target_data[difficulty]
+            
+            if success:
+                amount = random.randint(base_low, base_high)
+                await db.update_balance(str(self.user_id), amount)
+                embed = discord.Embed(title="💰 HEIST SUCCESSFUL", description=f"You looted **{amount:,}** {CURRENCY_NAME}!", color=0x2ECC71)
+            else:
+                loss = random.randint(10000, 50000)
+                await db.update_balance(str(self.user_id), -loss)
+                await db.set_cooldown(str(self.user_id), "jail", datetime.now() + timedelta(minutes=30))
+                embed = discord.Embed(title="🚨 HEIST FAILED", description=f"Busted! Fined **{loss:,}** and jailed for 30m.", color=0xE74C3C)
+            
+            await interaction.response.edit_message(content=None, embed=embed, view=None)
+        return heist_callback
+
+
+# ══════════════════════════════════════════════
 #  ERROR HANDLING
 # ══════════════════════════════════════════════
 
@@ -2388,21 +2734,20 @@ async def balance_cmd(ctx: commands.Context, member: discord.Member = None):
     embed.add_field(name="Bank", value=f"**{bank:,}** {CURRENCY_NAME}", inline=True)
     embed.add_field(name="Total", value=f"**{wallet + bank:,}** {CURRENCY_NAME}", inline=False)
     
-    # Active Effects / Inventory Summary
     if inventory:
         effects = []
         if "Lucky Coin" in inventory: effects.append("🍀 Luck +5%")
         if "Golden Clover" in inventory: effects.append("🍀 Luck +15%")
-        if "Thief Kit" in inventory: effects.append("🧤 Steal +10%")
+        if "Thief Kit" in inventory: effects.append("🧤 Steal +12%")
         if "Crime Mask" in inventory: effects.append("👺 Crime +15%")
-        if "Shield" in inventory: effects.append("🛡️ Shielded")
-        if "VIP Pass" in inventory: effects.append("💎 VIP (+50% Daily)")
+        if "Shield" in inventory: effects.append("🛡️ Shielded (40%)")
+        if "VIP Pass" in inventory: effects.append("💎 VIP (+75% Daily, +25% Work)")
         
         if effects:
             embed.add_field(name="Active Effects", value=", ".join(effects), inline=False)
 
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"Paradox Bot 💜 | Bank earns variable interest (1.1-2.3% hourly)")
+    embed.set_footer(text=f"Paradox Bot 💜 | Bank earns variable interest (-1% to 1.3% hourly)")
     await ctx.send(embed=embed)
 
 async def send_bank_interest(ctx: commands.Context):
@@ -2651,8 +2996,14 @@ async def bj_cmd(ctx: commands.Context, amount: str):
     if bet > balance:
         return await ctx.send(f"❌ You do not have enough {CURRENCY_NAME}. Your wallet has {balance:,}.")
 
+    inventory = await db.get_inventory(user_id)
+    win_chance = await RiggedOdds.calculate_win_chance("bj", inventory)
+    
+    # Logic for rigged blackjack (dealer gets slightly better cards if luck is low)
+    # This is handled inside BlackjackView, but we pass the win_chance
     await db.update_balance(user_id, -bet)
     view = BlackjackView(ctx, ctx.author.id, bet)
+    view.win_chance = win_chance # Pass win_chance to view
     embed = view.create_embed()
     await ctx.send(embed=embed, view=view)
 
@@ -2662,39 +3013,42 @@ async def daily_cmd(ctx: commands.Context):
     user_id = str(ctx.author.id)
     last_claim = await db.get_cooldown(user_id, "daily")
     
-    if last_claim:
-        # Check if 24 hours passed
-        if datetime.now() < last_claim + timedelta(days=1):
-            remaining = (last_claim + timedelta(days=1)) - datetime.now()
-            hours, remainder = divmod(int(remaining.total_seconds()), 3600)
-            minutes, _ = divmod(remainder, 60)
-            await ctx.send(f"❌ You already claimed your daily! Try again in **{hours}h {minutes}m**.")
-            return
+    cd_seconds = COMMAND_COOLDOWNS["daily"]
+    if last_claim and datetime.now() < last_claim + timedelta(seconds=cd_seconds):
+        rem = (last_claim + timedelta(seconds=cd_seconds)) - datetime.now()
+        return await ctx.send(f"❌ You already claimed your daily! Try again in **{int(rem.total_seconds()//3600)}h {int((rem.total_seconds()%3600)//60)}m**.")
 
-    amount = random.randint(5000, 15000)
-    
-    # VIP Pass check
+    # Buffed amount: 15,000 - 35,000
+    amount = random.randint(15000, 35000)
     inventory = await db.get_inventory(user_id)
-    if "VIP Pass" in inventory:
-        amount = int(amount * 1.5) # +50% bonus
+    if "VIP Pass" in inventory: amount = int(amount * 1.75)
         
     await db.update_balance(user_id, amount)
     await db.set_cooldown(user_id, "daily", datetime.now())
-    # Quest progress
     await db.update_quest_progress(user_id, "daily")
     await ctx.send(f"🎁 You claimed your daily reward of **{amount:,}** {CURRENCY_NAME}!")
 
 @bot.command(name="work")
-@commands.cooldown(1, 300, commands.BucketType.user) # 5 min cooldown
 async def work_cmd(ctx: commands.Context):
     """Work to earn some paradoxals safely."""
-    amount = random.randint(500, 2500)
-    jobs = ["Developer", "Designer", "Scripter", "Moderator", "Artist", "Gamer"]
+    user_id = str(ctx.author.id)
+    last_work = await db.get_cooldown(user_id, "work")
+    
+    cd = COMMAND_COOLDOWNS["work"]
+    if last_work and datetime.now() < last_work + timedelta(seconds=cd):
+        rem = (last_work + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ You are tired! Rest for **{int(rem.total_seconds())}s**.")
+
+    amount = random.randint(1000, 5000)
+    inventory = await db.get_inventory(user_id)
+    if "VIP Pass" in inventory: amount = int(amount * 1.25)
+    
+    jobs = ["Quantum Developer", "Void Designer", "Reality Scripter", "Timeline Moderator", "Paradox Artist"]
     job = random.choice(jobs)
     
-    await db.update_balance(str(ctx.author.id), amount)
-    # Quest progress
-    await db.update_quest_progress(str(ctx.author.id), "work")
+    await db.update_balance(user_id, amount)
+    await db.set_cooldown(user_id, "work", datetime.now())
+    await db.update_quest_progress(user_id, "work")
     await ctx.send(f"💼 You worked as a **{job}** and earned **{amount:,}** {CURRENCY_NAME}!")
 
 @bot.command(name="give", aliases=["pay", "transfer"])
@@ -2730,54 +3084,40 @@ async def give_cmd(ctx: commands.Context, member: discord.Member, amount: str):
 
 @bot.command(name="cf", aliases=["coinflip", "flip"])
 async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
-    """Flip a coin and win double your bet! Usage: !cf <bet> [heads/tails]"""
+    """Flip a coin with rigged house odds. Usage: !cf <bet> [heads/tails]"""
     user_id = str(ctx.author.id)
     balance = await db.get_balance(user_id)
 
-    if bet.lower() == "all":
-        bet_amount = balance
+    if bet.lower() == "all": bet_amount = balance
     else:
         try: bet_amount = int(bet)
-        except: return await ctx.send("❌ Please provide a valid bet amount.")
+        except: return await ctx.send("❌ Valid bet amount required.")
 
-    if bet_amount <= 0:
-        return await ctx.send("❌ Bet must be positive.")
-    if bet_amount > balance:
-        return await ctx.send("❌ You don't have enough paradoxy!")
+    if bet_amount <= 0 or bet_amount > balance:
+        return await ctx.send("❌ Invalid bet amount.")
 
     choice = choice.lower()
     if choice not in ["heads", "tails", "h", "t"]:
-        return await ctx.send("❌ Choose `heads` or `tails`.")
+        return await ctx.send("❌ Choose heads or tails.")
     
-    if choice == "h": choice = "heads"
-    if choice == "t": choice = "tails"
+    msg = await ctx.send("🪙 **Flipping...**")
+    await asyncio.sleep(1.5)
 
-    # Animation (Faster)
-    frames = ["🪙 **Flipping...**", "🔄 **Flipping...**", "📀 **Flipping...**", "🔄 **Flipping...**"]
-    msg = await ctx.send(frames[0])
-    for frame in frames[1:]:
-        await asyncio.sleep(0.3) # Faster spin
-        await msg.edit(content=frame)
+    inventory = await db.get_inventory(user_id)
+    win_chance = await RiggedOdds.calculate_win_chance("cf", inventory)
+    
+    win = random.random() < win_chance
+    result = choice if win else ("tails" if choice in ["heads", "h"] else "heads")
+    if result == "h": result = "heads"
+    if result == "t": result = "tails"
 
-    result = random.choice(["heads", "tails"])
-    win = choice == result
-
-    # Quest progress
     await db.update_quest_progress(user_id, "gamble")
-
-    embed = discord.Embed(title="🪙 Coinflip Result", color=0x3498DB)
-    embed.description = f"The coin landed on... **{result.upper()}**!\n\n"
-
     if win:
         await db.update_balance(user_id, bet_amount)
-        embed.description += f"🎉 **WIN!** You won **{bet_amount:,}** {CURRENCY_NAME}!"
-        embed.color = 0x2ECC71
+        await msg.edit(content=None, embed=discord.Embed(title="🪙 Coinflip WIN", description=f"Landed on **{result.upper()}**!\n🎉 Won **{bet_amount:,}** {CURRENCY_NAME}!", color=0x2ECC71))
     else:
         await db.update_balance(user_id, -bet_amount)
-        embed.description += f"💀 **LOSE!** You lost **{bet_amount:,}** {CURRENCY_NAME}."
-        embed.color = 0xE74C3C
-
-    await msg.edit(content=None, embed=embed)
+        await msg.edit(content=None, embed=discord.Embed(title="🪙 Coinflip LOSE", description=f"Landed on **{result.upper()}**!\n💀 Lost **{bet_amount:,}** {CURRENCY_NAME}.", color=0xE74C3C))
 
 @bot.command(name="leaderboard", aliases=["lb", "rich", "top"])
 async def leaderboard_cmd(ctx: commands.Context):
@@ -2839,101 +3179,79 @@ async def allow_cmd(ctx: commands.Context, member: discord.Member, *, command: s
 
 @bot.command(name="slots")
 async def slots_cmd(ctx: commands.Context, bet: int):
-    """Spin the slot machine. Wins multiply your bet!"""
+    """Rigged slot machine with inventory luck modifiers."""
     user_id = str(ctx.author.id)
     balance = await db.get_balance(user_id)
-    if bet <= 0 or bet > balance:
-        return await ctx.send("❌ You don't have enough paradoxals!")
-
+    if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
+    
+    msg = await ctx.send("🎰 **Spinning...**")
+    await asyncio.sleep(1.5)
+    
     inventory = await db.get_inventory(user_id)
-    luck_bonus = 0
-    if "Lucky Coin" in inventory: luck_bonus += 0.05
-    if "Golden Clover" in inventory: luck_bonus += 0.15
-
+    win_chance = await RiggedOdds.calculate_win_chance("slots_normal", inventory)
+    
+    win = random.random() < win_chance
     symbols = ["🍒", "🍋", "🍇", "💎", "⭐", "🔔"]
     
-    # Animation frames
-    rolling_msg = await ctx.send(f"🎰 **[ 🎰 | 🎰 | 🎰 ]**\n*Spinning...*")
-    for _ in range(3):
-        await asyncio.sleep(0.2)
-        temp_results = [random.choice(symbols) for _ in range(3)]
-        await rolling_msg.edit(content=f"🎰 **[ {' | '.join(temp_results)} ]**\n*Spinning...*")
-
-    results = [random.choice(symbols) for _ in range(3)]
-    # Simple luck: if no match, small chance to re-roll one
-    if results[0] != results[1] and results[1] != results[2] and random.random() < luck_bonus:
-        results[2] = random.choice(symbols)
-
-    # Quest progress
-    await db.update_quest_progress(user_id, "gamble")
-
-    embed = discord.Embed(title="🎰 Paradox Slots Result", color=0x9B59B6)
-    embed.description = f"**[ {' | '.join(results)} ]**\n\n"
-    
-    if results[0] == results[1] == results[2]:
-        payout = bet * 10
+    if win:
+        res = [random.choice(symbols)] * 3
+        payout = bet * 5
         await db.update_balance(user_id, payout)
-        embed.description += f"🎉 **JACKPOT!** You won **{payout:,}** {CURRENCY_NAME}!"
-        embed.color = 0x2ECC71
-    elif results[0] == results[1] or results[1] == results[2] or results[0] == results[2]:
-        payout = bet * 2
-        await db.update_balance(user_id, payout)
-        embed.description += f"✨ **WIN!** You won **{payout:,}** {CURRENCY_NAME}!"
-        embed.color = 0x3498DB
+        emb = discord.Embed(title="🎰 Slots WIN", description=f"**[ {' | '.join(res)} ]**\n🎉 Won **{payout:,}** {CURRENCY_NAME}!", color=0x2ECC71)
     else:
+        res = [random.choice(symbols) for _ in range(3)]
+        while res[0] == res[1] == res[2]: res = [random.choice(symbols) for _ in range(3)]
         await db.update_balance(user_id, -bet)
-        embed.description += f"💀 **LOSE!** You lost **{bet:,}** {CURRENCY_NAME}."
-        embed.color = 0xE74C3C
+        emb = discord.Embed(title="🎰 Slots LOSE", description=f"**[ {' | '.join(res)} ]**\n💀 Lost **{bet:,}** {CURRENCY_NAME}.", color=0xE74C3C)
         
-    await rolling_msg.edit(content=None, embed=embed)
+    await db.update_quest_progress(user_id, "gamble")
+    await msg.edit(content=None, embed=emb)
 
 @bot.command(name="roulette")
-@commands.cooldown(1, 5, commands.BucketType.user)
 async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
-    """Play roulette. Choices: red, black, green, or a number 0-36."""
+    """Rigged roulette with inventory luck modifiers."""
     user_id = str(ctx.author.id)
     balance = await db.get_balance(user_id)
-    if bet <= 0 or bet > balance:
-        return await ctx.send("❌ You don't have enough paradoxals!")
-        
-    inventory = await db.get_inventory(user_id)
-    luck_bonus = 0
-    if "Lucky Coin" in inventory: luck_bonus += 0.05
-    if "Golden Clover" in inventory: luck_bonus += 0.15
-
-    # Animation
-    roll_msg = await ctx.send("🎡 **The wheel is spinning...**")
-    wheel_frames = ["⚫ 15", "🔴 32", "⚫ 4", "🟢 0", "🔴 19", "⚫ 10"]
-    for i in range(3):
-        await asyncio.sleep(0.7)
-        await roll_msg.edit(content=f"🎡 **The wheel is spinning...**\n`[ {wheel_frames[i*2]} | {wheel_frames[i*2+1]} ]`")
-
-    number = secrets.randbelow(37)
-    # Apply luck: if lose, small chance to re-roll
-    if random.random() < luck_bonus:
-        number = secrets.randbelow(37) # Second chance
-
-    # Quest progress
-    await db.update_quest_progress(user_id, "gamble")
-
-    red_numbers = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
-    win = False
-    payout = 0
+    if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
     
-    if choice.lower() == "red" and number in red_numbers:
-        win = True
-        payout = bet * 2
-    elif choice.lower() == "black" and number != 0 and number not in red_numbers:
-        win = True
-        payout = bet * 2
-    elif choice.lower() == "green" and number == 0:
-        win = True
-        payout = bet * 35
-    elif choice.isdigit() and int(choice) == number:
-        win = True
-        payout = bet * 35
-        
-    embed = discord.Embed(title="🎡 Paradox Roulette", color=0x34495E)
+    inventory = await db.get_inventory(user_id)
+    win_chance = await RiggedOdds.calculate_win_chance("roulette_red", inventory)
+    
+    msg = await ctx.send("🎡 **Spinning...**")
+    await asyncio.sleep(2)
+    
+    win = random.random() < win_chance
+    reds = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]
+    
+    if win:
+        if choice.lower() == "red": res_num = random.choice(reds)
+        elif choice.lower() == "black": res_num = random.choice([n for n in range(1, 37) if n not in reds])
+        else: res_num = random.choice([n for n in range(0, 37)]) # Catch-all for numbers/green
+    else:
+        res_num = random.randint(0, 36)
+        # Ensure it's NOT a win if it was rigged to lose
+        is_red = res_num in reds
+        if choice.lower() == "red" and is_red: res_num = 2 # Force black
+        elif choice.lower() == "black" and not is_red and res_num != 0: res_num = 1 # Force red
+
+    color = "GREEN" if res_num == 0 else ("RED" if res_num in reds else "BLACK")
+    
+    actually_won = False
+    if choice.lower() == "red" and res_num in reds: actually_won = True
+    elif choice.lower() == "black" and res_num != 0 and res_num not in reds: actually_won = True
+    elif choice.lower() == "green" and res_num == 0: actually_won = True
+    elif choice.isdigit() and int(choice) == res_num: actually_won = True
+
+    await db.update_quest_progress(user_id, "gamble")
+    if actually_won:
+        payout = bet * (35 if choice.lower() == "green" or choice.isdigit() else 2)
+        await db.update_balance(user_id, payout - bet)
+        emb = discord.Embed(title="🎡 Roulette WIN", description=f"Landed on **{color} {res_num}**!\n🎉 Won **{payout:,}** {CURRENCY_NAME}!", color=0x2ECC71)
+    else:
+        await db.update_balance(user_id, -bet)
+        emb = discord.Embed(title="🎡 Roulette LOSE", description=f"Landed on **{color} {res_num}**!\n💀 Lost **{bet:,}** {CURRENCY_NAME}.", color=0xE74C3C)
+
+    await msg.edit(content=None, embed=emb)
     color_name = "🟢 Green" if number == 0 else ("🔴 Red" if number in red_numbers else "⚫ Black")
     embed.description = f"The ball landed on: **{number} ({color_name})**\n\n"
     
@@ -2948,6 +3266,8 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
         
     await roll_msg.edit(content=None, embed=embed)
 
+
+# ── POKER SYSTEM ──────────────────────────────
 
 # ── POKER SYSTEM ──────────────────────────────
 
@@ -2995,65 +3315,65 @@ def evaluate_poker_hand(hole_cards, community_cards):
     
     # Royal flush
     if flush and straight and straight_high == 14 and all(r in ranks for r in [10,11,12,13,14]) and all(suits[i] == flush_suit for i, r in enumerate(ranks) if r in [10,11,12,13,14]):
-        return (10, "Royal Flush")
+        return (10, "Royal Flush 👑")
     
     # Straight flush
     if flush and straight:
-        return (9, f"Straight Flush ({straight_high})")
+        return (9, f"Straight Flush {straight_high} 🔥")
     
     # Four of a kind
     if 4 in rank_counts.values():
         quad = next(r for r, c in rank_counts.items() if c == 4)
-        return (8, f"Four of a Kind ({quad})")
+        return (8, f"Four of a Kind 🔷")
     
     # Full house
     if 3 in rank_counts.values() and 2 in rank_counts.values():
         trips = next(r for r, c in rank_counts.items() if c == 3)
         pair = next(r for r, c in rank_counts.items() if c == 2)
-        return (7, f"Full House ({trips} over {pair})")
+        return (7, f"Full House 🏠")
     
     # Flush
     if flush:
-        flush_cards = sorted([r for r, s in zip(ranks, suits) if s == flush_suit], reverse=True)[:5]
-        return (6, f"Flush ({flush_cards[0]})")
+        return (6, f"Flush 💧")
     
     # Straight
     if straight:
-        return (5, f"Straight ({straight_high})")
+        return (5, f"Straight 〰️")
     
     # Three of a kind
     if 3 in rank_counts.values():
         trips = next(r for r, c in rank_counts.items() if c == 3)
-        return (4, f"Three of a Kind ({trips})")
+        return (4, f"Three of a Kind 🎲")
     
     # Two pair
     pairs = [r for r, c in rank_counts.items() if c == 2]
     if len(pairs) >= 2:
         pairs.sort(reverse=True)
-        return (3, f"Two Pair ({pairs[0]} and {pairs[1]})")
+        return (3, f"Two Pair 👥")
     
     # One pair
     if 2 in rank_counts.values():
         pair = next(r for r, c in rank_counts.items() if c == 2)
-        return (2, f"One Pair ({pair})")
+        return (2, f"Pair 2️⃣")
     
     # High card
     high = max(ranks)
-    return (1, f"High Card ({high})")
+    return (1, f"High Card 🃏")
+
 
 class PokerGame:
     def __init__(self, ctx, min_buyin, max_buyin):
         self.ctx = ctx
         self.min_buyin = min_buyin
         self.max_buyin = max_buyin
-        self.players = {}  # user_id: {'buyin': amount, 'cards': [], 'folded': False, 'bet': 0, 'chips': amount}
+        self.players = {}  # user_id: {'buyin': amount, 'cards': [], 'folded': False, 'bet': 0, 'chips': amount, 'all_in': False}
         self.deck = self.create_deck()
         self.community_cards = []
         self.pot = 0
         self.current_bet = 0
         self.dealer_pos = 0
         self.current_player_index = 0
-        self.round = 'waiting'  # waiting, preflop, flop, turn, river, showdown
+        self.round = 'waiting'
         self.message = None
         self.view = None
         self.last_raiser = None
@@ -3071,14 +3391,20 @@ class PokerGame:
             return False
         if not (self.min_buyin <= buyin <= self.max_buyin):
             return False
-        self.players[user_id] = {'buyin': buyin, 'cards': [], 'folded': False, 'bet': 0, 'chips': buyin}
+        self.players[user_id] = {
+            'buyin': buyin, 
+            'cards': [], 
+            'folded': False, 
+            'bet': 0, 
+            'chips': buyin, 
+            'all_in': False
+        }
         self.pot += buyin
         return True
 
     def start_game(self):
         if len(self.players) < 2:
             return False
-        # Deal 2 cards each
         for player in self.players.values():
             player['cards'] = [self.deck.pop(), self.deck.pop()]
         self.round = 'preflop'
@@ -3092,21 +3418,24 @@ class PokerGame:
         player_ids = list(self.players.keys())
         return player_ids[self.current_player_index]
 
+    def get_active_players_count(self):
+        """Count players still in the game (not folded)"""
+        return sum(1 for p in self.players.values() if not p['folded'])
+
     def next_player(self):
         self.current_player_index = (self.current_player_index + 1) % len(self.players)
-        # Skip folded players
-        while self.players[self.get_current_player_id()]['folded']:
+        while self.players[self.get_current_player_id()]['folded'] or self.players[self.get_current_player_id()].get('all_in', False):
             self.current_player_index = (self.current_player_index + 1) % len(self.players)
 
     def advance_round(self):
         if self.round == 'preflop':
-            self.community_cards = [self.deck.pop() for _ in range(3)]  # Flop
+            self.community_cards = [self.deck.pop() for _ in range(3)]
             self.round = 'flop'
         elif self.round == 'flop':
-            self.community_cards.append(self.deck.pop())  # Turn
+            self.community_cards.append(self.deck.pop())
             self.round = 'turn'
         elif self.round == 'turn':
-            self.community_cards.append(self.deck.pop())  # River
+            self.community_cards.append(self.deck.pop())
             self.round = 'river'
         elif self.round == 'river':
             self.round = 'showdown'
@@ -3114,6 +3443,44 @@ class PokerGame:
         self.last_raiser = None
         self.betting_round_complete = False
         self.current_player_index = (self.dealer_pos + 1) % len(self.players)
+
+    def check_betting_complete(self):
+        """Check if all non-folded players have matched the current bet"""
+        active_players = [p for p in self.players.values() if not p['folded'] and not p.get('all_in', False)]
+        if len(active_players) <= 1:
+            return True
+        for p in active_players:
+            if p['bet'] != self.current_bet and p['chips'] > 0:
+                return False
+        return True
+
+    def calculate_hand_strength(self, user_id):
+        """Calculate win probability based on current hand"""
+        player = self.players[user_id]
+        hand = player['cards']
+        
+        rank, desc = evaluate_poker_hand(hand, self.community_cards)
+        
+        # Base strength calculation
+        base_strength = (rank / 10) * 100
+        
+        if len(self.community_cards) == 0:
+            # Preflop
+            h1 = hand[0][:-1]
+            h2 = hand[1][:-1]
+            if h1 == h2:
+                base_strength += 15  # Pocket pair boost
+            rank_vals = {'A': 14, 'K': 13, 'Q': 12, 'J': 11}
+            h1_val = rank_vals.get(h1, int(h1) if h1.isdigit() else 0)
+            h2_val = rank_vals.get(h2, int(h2) if h2.isdigit() else 0)
+            if h1_val >= 10 and h2_val >= 10:
+                base_strength += 10
+        elif len(self.community_cards) < 5:
+            # Mid-hand: boost if showing strength
+            if rank >= 5:
+                base_strength += (rank - 4) * 5
+        
+        return min(95, max(5, base_strength))
 
     def get_winners(self):
         active_players = {uid: p for uid, p in self.players.items() if not p['folded']}
@@ -3126,144 +3493,288 @@ class PokerGame:
         winners = [uid for uid, h in hands.items() if h[0] == max_rank]
         return winners, hands
 
-    def check_betting_complete(self):
-        active_players = [p for p in self.players.values() if not p['folded']]
-        if len(active_players) <= 1:
-            return True
-        for p in active_players:
-            if p['bet'] != self.current_bet:
-                return False
-        return True
-
-    async def send_hand_info(self, user_id):
-        player = self.players[user_id]
-        rank, desc = evaluate_poker_hand(player['cards'], self.community_cards)
-        user = await bot.fetch_user(int(user_id))
-        embed = discord.Embed(
-            title="🃏 Your Poker Hand",
-            description=f"Your cards: {player['cards'][0]} {player['cards'][1]}\n\n**Current Hand:** {desc}",
-            color=0x34495E
-        )
-        if self.community_cards:
-            embed.add_field(name="Community Cards", value=" ".join(self.community_cards), inline=False)
-        try:
-            await user.send(embed=embed)
-        except discord.Forbidden:
-            pass
-
     async def update_embed(self):
         embed = discord.Embed(title="🃏 Paradox Poker", color=0x34495E)
         embed.add_field(name="Round", value=self.round.capitalize(), inline=True)
-        embed.add_field(name="Pot", value=f"{self.pot:,} {CURRENCY_NAME}", inline=True)
-        embed.add_field(name="Current Bet", value=f"{self.current_bet:,} {CURRENCY_NAME}", inline=True)
+        embed.add_field(name="Pot", value=f"{self.pot:,} 💰", inline=True)
+        embed.add_field(name="Bet to Call", value=f"{self.current_bet:,} 💰", inline=True)
+        
         if self.community_cards:
-            embed.add_field(name="Community Cards", value=" ".join(self.community_cards), inline=False)
+            embed.add_field(name="Community", value=" ".join(self.community_cards), inline=False)
+        
         players_text = ""
         for uid, p in self.players.items():
-            status = "Folded" if p['folded'] else f"Bet: {p['bet']:,} | Chips: {p['chips']:,}"
+            if p['folded']:
+                status = "❌ Folded"
+            elif p.get('all_in', False):
+                status = f"🔴 **All-In** | Chips in: {p['bet']:,}"
+            else:
+                status = f"Chips: {p['chips']:,} | Bet: {p['bet']:,}"
             players_text += f"<@{uid}>: {status}\n"
         embed.add_field(name="Players", value=players_text, inline=False)
-        current_player = self.get_current_player_id()
-        embed.add_field(name="Current Turn", value=f"<@{current_player}>", inline=False)
+        
+        active_count = self.get_active_players_count()
+        if active_count > 1:
+            current_player = self.get_current_player_id()
+            embed.add_field(name="⏸️ Your Turn", value=f"<@{current_player}>", inline=False)
+        
         self.view = PokerView(self)
         await self.message.edit(embed=embed, view=self.view)
+
 
 class PokerView(discord.ui.View):
     def __init__(self, game):
         super().__init__(timeout=300)
         self.game = game
 
-    @discord.ui.button(label="Fold", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="Fold", style=discord.ButtonStyle.red, emoji="🚫")
     async def fold_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_action(interaction, 'fold')
-
-    @discord.ui.button(label="Check/Call", style=discord.ButtonStyle.blurple)
-    async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.handle_action(interaction, 'call')
-
-    @discord.ui.button(label="Raise", style=discord.ButtonStyle.green)
-    async def raise_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Open modal for raise amount
-        modal = RaiseModal(self.game)
-        await interaction.response.send_modal(modal)
-
-    async def handle_action(self, interaction, action):
         user_id = str(interaction.user.id)
         if user_id != self.game.get_current_player_id():
-            return await interaction.response.send_message("It's not your turn!", ephemeral=True)
+            return await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
         
-        player = self.game.players[user_id]
-        if action == 'fold':
-            player['folded'] = True
-            await interaction.response.send_message(f"{interaction.user.mention} folded.", ephemeral=False)
-        elif action == 'call':
-            call_amount = self.game.current_bet - player['bet']
-            if call_amount < 0:
-                call_amount = 0
-            if call_amount > player['chips']:
-                return await interaction.response.send_message("Not enough chips!", ephemeral=True)
-            if call_amount > 0:
-                player['bet'] += call_amount
-                player['chips'] -= call_amount
-                self.game.pot += call_amount
-                await interaction.response.send_message(f"{interaction.user.mention} called {call_amount:,} {CURRENCY_NAME}.", ephemeral=False)
-            else:
-                await interaction.response.send_message(f"{interaction.user.mention} checked.", ephemeral=False)
+        self.game.players[user_id]['folded'] = True
+        await interaction.response.send_message(f"**{interaction.user.display_name}** folded.", ephemeral=False)
+        
+        # Check if only 1 player left
+        if self.game.get_active_players_count() == 1:
+            await self.end_game_early(interaction)
+            return
         
         self.game.next_player()
         await self.game.update_embed()
-        await self.game.send_hand_info(user_id)
 
-class RaiseModal(discord.ui.Modal, title="Raise Amount"):
-    amount = discord.ui.TextInput(label="Amount to raise", placeholder="Enter amount", required=True)
-
-    def __init__(self, game):
-        super().__init__()
-        self.game = game
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            raise_amount = int(self.amount.value)
-        except ValueError:
-            return await interaction.response.send_message("Invalid amount!", ephemeral=True)
-        
+    @discord.ui.button(label="Check/Call", style=discord.ButtonStyle.blurple, emoji="✅")
+    async def call_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
+        if user_id != self.game.get_current_player_id():
+            return await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
+        
         player = self.game.players[user_id]
-        total_bet = self.game.current_bet + raise_amount
-        call_amount = self.game.current_bet - player['bet']
-        total_cost = call_amount + raise_amount
+        call_amount = min(self.game.current_bet - player['bet'], player['chips'])
         
-        if total_cost > player['chips']:
-            return await interaction.response.send_message("Not enough chips!", ephemeral=True)
+        if call_amount > 0:
+            player['bet'] += call_amount
+            player['chips'] -= call_amount
+            self.game.pot += call_amount
+            
+            if player['chips'] == 0:
+                player['all_in'] = True
+                await interaction.response.send_message(f"**{interaction.user.display_name}** called and went **All-In**! 🔴", ephemeral=False)
+            else:
+                await interaction.response.send_message(f"**{interaction.user.display_name}** called {call_amount:,} 💰", ephemeral=False)
+        else:
+            await interaction.response.send_message(f"**{interaction.user.display_name}** checked.", ephemeral=False)
         
-        player['bet'] = total_bet
-        player['chips'] -= total_cost
-        self.game.pot += total_cost
-        self.game.current_bet = total_bet
-        self.game.last_raiser = user_id
+        if self.game.get_active_players_count() == 1:
+            await self.end_game_early(interaction)
+            return
         
-        await interaction.response.send_message(f"{interaction.user.mention} raised to {total_bet:,} {CURRENCY_NAME}.", ephemeral=False)
-        
-        self.game.next_player()
         if self.game.check_betting_complete():
             self.game.advance_round()
             if self.game.round == 'showdown':
-                winners, hands = self.game.get_winners()
-                if winners:
-                    pot_split = self.game.pot // len(winners)
-                    for winner in winners:
-                        await db.update_balance(winner, pot_split)
-                    winner_names = [f"<@{w}>" for w in winners]
-                    embed = discord.Embed(title="🃏 Poker Results", description=f"Winners: {', '.join(winner_names)}\nEach gets: {pot_split:,} {CURRENCY_NAME}", color=0x2ECC71)
-                    await self.game.message.edit(embed=embed, view=None)
-                    del active_poker_games[self.game.ctx.channel.id]
-                else:
-                    await self.game.message.edit(embed=discord.Embed(title="🃏 Poker", description="No winner.", color=0xE74C3C), view=None)
-                    del active_poker_games[self.game.ctx.channel.id]
+                await self.finish_game(interaction)
             else:
                 await self.game.update_embed()
         else:
+            self.game.next_player()
             await self.game.update_embed()
+
+    @discord.ui.button(label="Raise", style=discord.ButtonStyle.success, emoji="📈")
+    async def raise_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        if user_id != self.game.get_current_player_id():
+            return await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
+        
+        modal = RaiseModal(self.game, interaction.user)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Check Hand", style=discord.ButtonStyle.secondary, emoji="🤔")
+    async def check_hand(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        if user_id not in self.game.players:
+            return await interaction.response.send_message("❌ You're not in this game!", ephemeral=True)
+        
+        player = self.game.players[user_id]
+        rank, desc = evaluate_poker_hand(player['cards'], self.game.community_cards)
+        strength = self.game.calculate_hand_strength(user_id)
+        
+        # Show initial analyzing message
+        await interaction.response.send_message(embed=discord.Embed(title="🤔 Analyzing Your Hand...", description="⏳ Computing hand strength...", color=0x3498DB), ephemeral=True)
+        
+        await asyncio.sleep(1.5)
+        
+        # Show results
+        result_embed = discord.Embed(title="🃏 Your Hand Analysis", color=0x9B59B6)
+        result_embed.add_field(name="Your Cards", value=f"{player['cards'][0]} {player['cards'][1]}", inline=False)
+        
+        if self.game.community_cards:
+            result_embed.add_field(name="Community Cards", value=" ".join(self.game.community_cards), inline=False)
+        
+        result_embed.add_field(name="Hand", value=f"**{desc}** {rank}/10 strength", inline=False)
+        
+        # Strength visualization
+        strength_bar = "█" * int(strength / 10) + "░" * (10 - int(strength / 10))
+        result_embed.add_field(name="Win Probability", value=f"`{strength_bar}` **{strength:.0f}%**", inline=False)
+        
+        # Strategy tip
+        if strength > 70: tip = "🟢 Strong hand - Consider raising!"
+        elif strength > 50: tip = "🟡 Medium hand - Good position to call"
+        elif strength > 30: tip = "🟠 Weak hand - Be cautious"
+        else: tip = "🔴 Very weak hand - Fold might be best"
+        result_embed.add_field(name="Suggestion", value=tip, inline=False)
+        
+        result_embed.set_footer(text="This is a rough estimate based on visible cards")
+        await interaction.edit_original_response(embed=result_embed)
+
+    async def end_game_early(self, interaction: discord.Interaction):
+        """End game when only 1 player remains"""
+        self.game.stop()
+        for item in self.children:
+            item.disabled = True
+        
+        winner = None
+        for uid, p in self.game.players.items():
+            if not p['folded']:
+                winner = uid
+                break
+        
+        if winner:
+            # Return all chips to the winner
+            await db.update_balance(winner, self.game.pot)
+            
+            embed = discord.Embed(
+                title="🏆 Game Over - Winner!",
+                description=f"<@{winner}> won **{self.game.pot:,}** 💰\n\nAll other players folded!",
+                color=0x2ECC71
+            )
+            await self.game.message.edit(embed=embed, view=self)
+            if self.game.ctx.channel.id in active_poker_games:
+                del active_poker_games[self.game.ctx.channel.id]
+
+    async def finish_game(self, interaction: discord.Interaction):
+        """Distribute pot at showdown"""
+        self.game.stop()
+        for item in self.children:
+            item.disabled = True
+        
+        # Show all community cards
+        await self.game.message.edit(view=self)
+        
+        # Animate dealer thinking
+        await interaction.channel.send("🤔 **The dealer is comparing hands...**")
+        await asyncio.sleep(2)
+        
+        winners, hands = self.game.get_winners()
+        
+        if not winners:
+            await interaction.channel.send("❌ Error determining winner")
+            return
+        
+        # Split pot equally among winners
+        pot_split = self.game.pot // len(winners)
+        
+        results_text = "```\n╔════════════════════════════════╗\n║       FINAL SHOWDOWN RESULTS   ║\n╚════════════════════════════════╝\n\n"
+        
+        for uid, (rank, desc) in hands.items():
+            player = self.game.players[uid]
+            user = bot.get_user(int(uid))
+            name = user.name if user else uid
+            status = "🏆 WINNER" if uid in winners else "❌ Loser"
+            results_text += f"{status}: {name}\n  Hand: {desc}\n  Cards: {player['cards'][0]} {player['cards'][1]}\n\n"
+        
+        results_text += "```"
+        
+        # Award winners
+        for winner in winners:
+            await db.update_balance(winner, pot_split)
+        
+        results_text += f"\n💰 **Each winner receives: {pot_split:,} {CURRENCY_NAME}**"
+        
+        embed = discord.Embed(
+            title="🃏 Poker Game Results",
+            description=results_text,
+            color=0x2ECC71 if len(winners) == 1 else 0x3498DB
+        )
+        embed.set_footer(text="Thanks for playing Paradox Poker!")
+        
+        await interaction.channel.send(embed=embed)
+        if self.game.ctx.channel.id in active_poker_games:
+            del active_poker_games[self.game.ctx.channel.id]
+
+
+class RaiseModal(discord.ui.Modal, title="💰 Raise Amount"):
+    amount_input = discord.ui.TextInput(
+        label="Amount to Raise",
+        placeholder="Enter the total bet amount",
+        required=True
+    )
+
+    def __init__(self, game, user):
+        super().__init__()
+        self.game = game
+        self.user = user
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            raise_amount = int(self.amount_input.value)
+        except ValueError:
+            return await interaction.response.send_message("❌ Please enter a valid number!", ephemeral=True)
+        
+        user_id = str(self.user.id)
+        if user_id != self.game.get_current_player_id():
+            return await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
+        
+        player = self.game.players[user_id]
+        
+        # Validate raise is higher than current bet
+        if raise_amount <= self.game.current_bet:
+            return await interaction.response.send_message(
+                f"❌ Raise must be higher than current bet ({self.game.current_bet:,} 💰)",
+                ephemeral=True
+            )
+        
+        # Handle ALL-IN logic
+        call_cost = self.game.current_bet - player['bet']
+        total_cost = call_cost + (raise_amount - self.game.current_bet)
+        
+        if total_cost > player['chips']:
+            if player['chips'] > 0:
+                # Go all-in with what they have
+                all_in_amount = player['chips']
+                player['bet'] += all_in_amount
+                player['chips'] = 0
+                player['all_in'] = True
+                self.game.pot += all_in_amount
+                
+                await interaction.response.send_message(
+                    f"**{self.user.display_name}** went **All-In** with {all_in_amount:,} 💰 🔴",
+                    ephemeral=False
+                )
+            else:
+                return await interaction.response.send_message("❌ You have no chips left!", ephemeral=True)
+        else:
+            # Normal raise
+            player['bet'] = raise_amount
+            player['chips'] -= total_cost
+            self.game.pot += total_cost
+            self.game.current_bet = raise_amount
+            self.game.last_raiser = user_id
+            
+            await interaction.response.send_message(
+                f"**{self.user.display_name}** raised to {raise_amount:,} 💰",
+                ephemeral=False
+            )
+        
+        # Check if game should end
+        if self.game.get_active_players_count() == 1:
+            # Only need to recreate the view to get access to interaction
+            view = PokerView(self.game)
+            await view.end_game_early(interaction)
+            return
+        
+        self.game.next_player()
+        await self.game.update_embed()
 
 @bot.group(name="poker", invoke_without_command=True)
 @commands.cooldown(1, 5, commands.BucketType.user)
@@ -3348,9 +3859,6 @@ async def poker_start_handler(ctx: commands.Context):
         return await ctx.send("❌ Need at least 2 players to start.")
     if game.start_game():
         await game.update_embed()
-        # Send each player their cards via DM
-        for uid in game.players:
-            await game.send_hand_info(uid)
     else:
         await ctx.send("❌ Failed to start game.")
 
@@ -3792,90 +4300,33 @@ class TeamHeistView(discord.ui.View):
         embed.description = f"**Current Team:**\n" + "\n".join([f"<@{m}>" for m in self.members]) + f"\n\n*Starting in 30s...*"
         await interaction.message.edit(embed=embed)
 
-    @discord.ui.button(label="Start Now", style=discord.ButtonStyle.success)
-    async def start_early(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.leader.id:
-            return await interaction.response.send_message("Only the leader can start early!", ephemeral=True)
-        self.stop()
 
 @bot.command(name="heist")
-@commands.cooldown(1, 150, commands.BucketType.user)
 async def heist_cmd(ctx: commands.Context):
     """Start a strategic heist. Choose your difficulty!"""
     user_id = str(ctx.author.id)
     jail_end = await db.get_cooldown(user_id, "jail")
     if jail_end and datetime.now() < jail_end:
         rem = jail_end - datetime.now()
-        return await ctx.send(f"🔒 You are currently in **Jail**! You'll be released in **{int(rem.total_seconds()//60)}m {int(rem.total_seconds()%60)}s**.")
+        return await ctx.send(f"🔒 You are currently in **Jail**! You'll be released in **{int(rem.total_seconds()//60)}m**.")
 
-    # Animation
+    # Check cooldown
+    last_heist = await db.get_cooldown(user_id, "heist")
+    cd = COMMAND_COOLDOWNS["heist"]
+    if last_heist and datetime.now() < last_heist + timedelta(seconds=cd):
+        rem = (last_heist + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Your heist crew is laying low. Try again in **{int(rem.total_seconds()//60)}m**.")
+
     msg = await ctx.send("🏦 **Preparing the heist equipment...**")
     await asyncio.sleep(2.0)
 
     embed = discord.Embed(title="🏦 Strategic Heist", color=0x34495E)
-    embed.description = "Choose the target for your operation: Jewelry Store, Main Bank, or Armored Truck. Then choose difficulty. Easy is a guaranteed success."
+    embed.description = "Choose the target for your operation. Higher risk = higher reward!"
     view = HeistTargetView(ctx)
     await msg.edit(content=None, embed=embed, view=view)
-
-@bot.command(name="teamheist", aliases=["th"])
-@commands.cooldown(1, 150, commands.BucketType.user)
-async def teamheist_cmd(ctx: commands.Context):
-    """Start a group heist with up to 5 people."""
-    user_id = str(ctx.author.id)
-    jail_end = await db.get_cooldown(user_id, "jail")
-    if jail_end and datetime.now() < jail_end:
-        rem = jail_end - datetime.now()
-        return await ctx.send(f"🔒 You are in **Jail**! You'll be released in **{int(rem.total_seconds()//60)}m**.")
-
-    embed = discord.Embed(title="🏦 MULTI-PLAYER TEAM HEIST", color=0x34495E)
-    embed.description = f"**Current Team:**\n{ctx.author.mention}\n\n*Starting in 30s...*"
-    view = TeamHeistView(ctx.author)
-    msg = await ctx.send(embed=embed, view=view)
-    await asyncio.sleep(30)
-    view.stop()
-    
-    if len(view.members) < 2:
-        return await ctx.send("❌ Not enough people joined. Cancelled.")
-
-    await ctx.send(f"🔥 **THE HEIST IS STARTING!** Team of {len(view.members)} moving in...")
-    await asyncio.sleep(2)
-    
-    success = random.random() < (0.3 + (len(view.members) * 0.1))
-    if success:
-        total_payout = random.randint(50000, 150000) * len(view.members)
-        share = total_payout // len(view.members)
-        for m_id in view.members:
-            await db.update_balance(str(m_id), share)
-            await db.update_quest_progress(str(m_id), "crime")
-        await ctx.send(f"💎 **TEAM WIN!** Total: **{total_payout:,}**. Each got: **{share:,}** {CURRENCY_NAME}!")
-    else:
-        for m_id in view.members:
-            await db.set_cooldown(str(m_id), "jail", datetime.now() + timedelta(minutes=45))
-        await ctx.send("🚨 **TEAM BUSTED!** Everyone sent to **Jail** for 45m.")
-
-@bot.command(name="bail")
-async def bail_cmd(ctx: commands.Context):
-    """Pay bail to get out of jail early. Cost: 500 paradoxy per minute remaining."""
-    user_id = str(ctx.author.id)
-    jail_end = await db.get_cooldown(user_id, "jail")
-    
-    if not jail_end or datetime.now() >= jail_end:
-        return await ctx.send("❌ You are not in jail.")
-    
-    rem = jail_end - datetime.now()
-    remaining_minutes = max(1, int(rem.total_seconds() / 60))
-    bail_cost = remaining_minutes * 500
-    
-    wallet = await db.get_balance(user_id)
-    if wallet < bail_cost:
-        return await ctx.send(f"❌ Bail costs **{bail_cost:,}** {CURRENCY_NAME}. You only have **{wallet:,}**.")
-    
-    await db.update_balance(user_id, -bail_cost)
-    await db.set_cooldown(user_id, "jail", datetime.now())  # Release immediately
-    await ctx.send(f"✅ You paid **{bail_cost:,}** {CURRENCY_NAME} bail and were released from jail!")
+    await db.set_cooldown(user_id, "heist", datetime.now())
 
 @bot.command(name="crime")
-@commands.cooldown(1, 60, commands.BucketType.user)
 async def crime_cmd(ctx: commands.Context):
     """Commit a quick random crime for fast cash."""
     user_id = str(ctx.author.id)
@@ -3883,28 +4334,28 @@ async def crime_cmd(ctx: commands.Context):
     if jail_end and datetime.now() < jail_end:
         rem = jail_end - datetime.now()
         return await ctx.send(f"🔒 You are in **Jail**! Release in **{int(rem.total_seconds()//60)}m**.")
-    
+
+    last_crime = await db.get_cooldown(user_id, "crime")
+    cd = COMMAND_COOLDOWNS["crime"]
+    if last_crime and datetime.now() < last_crime + timedelta(seconds=cd):
+        rem = (last_crime + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Wait **{int(rem.total_seconds())}s**.")
+
     scenarios = [
-        {"name": "Pickpocketing", "msg": "You snuck through the crowd and swiped a wallet!", "win_range": (1000, 3500), "fail_msg": "You were caught with your hand in someone's pocket!", "fine_range": (500, 1500), "chance": 0.7},
-        {"name": "Vandalism", "msg": "You spray-painted the governor's car and found some cash inside!", "win_range": (2000, 5000), "fail_msg": "The alarm went off and you had to bail!", "fine_range": (1000, 2000), "chance": 0.6},
-        {"name": "Hacking", "msg": "You bypassed a local ATM's security!", "win_range": (5000, 12000), "fail_msg": "The cyber-police tracked your IP!", "fine_range": (2000, 5000), "chance": 0.5},
-        {"name": "Smuggling", "msg": "You successfully moved 'restricted items' across the border!", "win_range": (15000, 35000), "fail_msg": "Customs found the hidden compartment!", "fine_range": (5000, 15000), "chance": 0.4},
-        {"name": "Bank Heist", "msg": "You cracked the vault at the local branch!", "win_range": (40000, 80000), "fail_msg": "SWAT was waiting at the exit!", "fine_range": (15000, 25000), "chance": 0.25}
+        {"name": "Pickpocketing", "msg": "You swiped a wallet!", "win_range": (2000, 5000), "fail_msg": "Caught!", "fine_range": (1000, 3000), "chance": 0.65},
+        {"name": "Vandalism", "msg": "Spray-painted a car!", "win_range": (3000, 7000), "fail_msg": "Alarm!", "fine_range": (2000, 4000), "chance": 0.55},
+        {"name": "Hacking", "msg": "Bypassed an ATM!", "win_range": (8000, 15000), "fail_msg": "Tracked!", "fine_range": (4000, 8000), "chance": 0.45}
     ]
     
-    # Animation
-    msg = await ctx.send("🕵️ **Planning the crime...**")
-    await asyncio.sleep(2.0)
+    msg = await ctx.send("🕵️ **Planning crime...**")
+    await asyncio.sleep(1.5)
     
     crime = random.choice(scenarios)
-    
-    # Inventory items (Crime Mask)
     inventory = await db.get_inventory(user_id)
     chance_mod = 0.15 if "Crime Mask" in inventory else 0
     
     success = random.random() < (crime["chance"] + chance_mod)
-    
-    # Quest progress
+    await db.set_cooldown(user_id, "crime", datetime.now())
     await db.update_quest_progress(user_id, "crime")
 
     if success:
@@ -3913,107 +4364,67 @@ async def crime_cmd(ctx: commands.Context):
         embed = discord.Embed(title=f"✅ Crime: {crime['name']}", description=f"{crime['msg']}\n\nYou earned **{amount:,}** {CURRENCY_NAME}!", color=0x2ECC71)
     else:
         loss = random.randint(*crime["fine_range"])
-        if "Crime Mask" in inventory: loss = int(loss * 0.7) # 30% less fine
+        if "Crime Mask" in inventory: loss = int(loss * 0.7)
         await db.update_balance(user_id, -loss)
         embed = discord.Embed(title=f"🚨 Busted: {crime['name']}", description=f"{crime['fail_msg']}\n\nYou were fined **{loss:,}** {CURRENCY_NAME}!", color=0xE74C3C)
     
-    embed.set_footer(text="Paradox Bot 💜 | Use !heist for bigger jobs")
     await msg.edit(content=None, embed=embed)
 
 @bot.command(name="steal")
-@commands.cooldown(1, 300, commands.BucketType.user)
 async def steal_cmd(ctx: commands.Context, target: discord.Member):
     """Attempt to rob another user's wallet."""
-    if target.id == ctx.author.id: return await ctx.send("❌ You can't rob yourself.")
-    if target.bot: return await ctx.send("❌ You can't rob bots.")
+    if target.id == ctx.author.id: return await ctx.send("❌ Can't rob yourself.")
+    if target.bot: return await ctx.send("❌ Can't rob bots.")
     
     t_id = str(target.id)
     a_id = str(ctx.author.id)
     t_bal = await db.get_balance(t_id)
     
-    if t_bal < 1000:
-        return await ctx.send(f"❌ **{target.display_name}** is too poor to be worth robbing.")
-    
-    # Target Shield check
-    target_inventory = await db.get_inventory(t_id)
-    if "Shield" in target_inventory and random.random() < 0.3:
-        return await ctx.send(f"🛡️ **{target.display_name}** blocked your robbery with their **Shield**!")
+    if t_bal < 5000: return await ctx.send(f"❌ {target.display_name} is too poor.")
 
-    # Attacker Thief Kit check
-    attacker_inventory = await db.get_inventory(a_id)
-    success_chance = 0.4 + (0.1 if "Thief Kit" in attacker_inventory else 0)
-        
-    success = random.random() < success_chance
+    last_steal = await db.get_cooldown(a_id, "steal")
+    cd = COMMAND_COOLDOWNS["steal"]
+    if last_steal and datetime.now() < last_steal + timedelta(seconds=cd):
+        rem = (last_steal + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Wait **{int(rem.total_seconds()//60)}m**.")
+
+    t_inv = await db.get_inventory(t_id)
+    if "Shield" in t_inv and random.random() < 0.4:
+        return await ctx.send(f"🛡️ **{target.display_name}**'s **Shield** blocked you!")
+
+    a_inv = await db.get_inventory(a_id)
+    success_chance = 0.35 + (0.12 if "Thief Kit" in a_inv else 0)
     
-    # Quest progress
+    success = random.random() < success_chance
+    await db.set_cooldown(a_id, "steal", datetime.now())
     await db.update_quest_progress(a_id, "steal")
 
     if success:
-        stolen = random.randint(int(t_bal * 0.1), int(t_bal * 0.4))
-        # Ensure we deduct from target and add to attacker
-        await db.db.users.update_one({"_id": t_id}, {"$inc": {"balance": -stolen}}, upsert=True)
+        stolen = random.randint(int(t_bal * 0.1), int(t_bal * 0.3))
+        await db.update_balance(t_id, -stolen)
         await db.update_balance(a_id, stolen)
-        await ctx.send(f"💸 You successfully robbed **{target.display_name}** and took **{stolen:,}** {CURRENCY_NAME}!")
+        await ctx.send(f"💸 You robbed **{target.display_name}** for **{stolen:,}** {CURRENCY_NAME}!")
     else:
-        fine = random.randint(1000, 5000)
+        fine = random.randint(2000, 6000)
         await db.update_balance(a_id, -fine)
-        await ctx.send(f"🚔 You were caught robbing **{target.display_name}** and paid a **{fine:,}** fine to the police!")
+        await ctx.send(f"🚔 Caught! paid **{fine:,}** fine.")
 
-@bot.command(name="reseteco")
-@commands.is_owner()
-async def reset_eco_cmd(ctx: commands.Context, target: str):
-    """[Owner] Reset a user's economy or reset all users' economy."""
-    if target.lower() == "all":
-        await db.db.users.update_many(
-            {},
-            {
-                "$set": {"balance": 0, "bank": 0},
-                "$unset": {"loan": "", "inventory": "", "active_items": ""}
-            }
-        )
-        await ctx.send("✅ Reset economy for all users.")
-        return
-
-    member = ctx.message.mentions[0] if ctx.message.mentions else None
-    if not member:
-        try:
-            member = await commands.MemberConverter().convert(ctx, target)
-        except commands.BadArgument:
-            return await ctx.send("❌ Please mention a user or use `all`.")
-
-    user_id = str(member.id)
-    await db.db.users.update_one(
-        {"_id": user_id},
-        {
-            "$set": {"balance": 0, "bank": 0},
-            "$unset": {"loan": "", "inventory": "", "active_items": ""}
-        },
-        upsert=True
-    )
-    await ctx.send(f"✅ Reset economy for {member.display_name}.")
-
-@bot.command(name="useitem")
-async def use_item_cmd(ctx: commands.Context, *, item_name: str):
-    """Use an item from your inventory. Max 2 items active at once."""
+@bot.command(name="bail")
+async def bail_cmd(ctx: commands.Context):
+    """Pay bail to get out of jail early."""
     user_id = str(ctx.author.id)
-    inventory = await db.get_inventory(user_id)
+    jail_end = await db.get_cooldown(user_id, "jail")
+    if not jail_end or datetime.now() >= jail_end: return await ctx.send("❌ Not in jail.")
     
-    search = next((name for name in inventory if name.lower() == item_name.strip().lower()), None)
-    if not search:
-        return await ctx.send("❌ You don't own that item.")
+    rem = jail_end - datetime.now()
+    cost = max(1, int(rem.total_seconds() / 60)) * 1000
     
-    active_items = await db.get_user_field(user_id, "active_items", [])
-    if len(active_items) >= 2:
-        return await ctx.send(f"❌ You can only have 2 items active at once. Currently using: {', '.join(active_items)}")
+    bal = await db.get_balance(user_id)
+    if bal < cost: return await ctx.send(f"❌ Bail costs **{cost:,}**. You have **{bal:,}**.")
     
-    if search in active_items:
-        active_items.remove(search)
-        await db.set_user_field(user_id, "active_items", active_items)
-        await ctx.send(f"✅ Deactivated **{search}**.")
-    else:
-        active_items.append(search)
-        await db.set_user_field(user_id, "active_items", active_items)
-        await ctx.send(f"✅ Activated **{search}**. Active items: {', '.join(active_items)}")
+    await db.update_balance(user_id, -cost)
+    await db.set_cooldown(user_id, "jail", datetime.now())
+    await ctx.send(f"✅ Paid **{cost:,}** bail and released!")
 
 # ── SOCIAL ACTIONS ─────────────────────────────
 
