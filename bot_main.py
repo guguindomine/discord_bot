@@ -36,6 +36,13 @@ async def on_ready():
 
 async def main():
     """Main entry point for the bot."""
+    # Initialize Database
+    mongo_uri = os.getenv("MONGO_URI")
+    if mongo_uri:
+        db.setup(mongo_uri)
+    else:
+        print("⚠️ Warning: MONGO_URI not found. Database features will be disabled.")
+
     async with bot:
         # Load all extensions from the cogs directory
         cogs_dir = './cogs'
