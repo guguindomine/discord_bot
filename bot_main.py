@@ -4521,6 +4521,15 @@ class HeistTargetView(discord.ui.View):
         self.user_id = ctx.author.id
         self.selection_made = False
 
+    async def on_timeout(self):
+        if not self.selection_made:
+            user_id = str(self.user_id)
+            jail_time = 10
+            await db.set_cooldown(user_id, "jail", datetime.now() + timedelta(minutes=jail_time))
+            try:
+                await self.ctx.send(f"🚨 <@{self.user_id}>, you took too long to plan the heist! You've been spotted and jailed for **{jail_time}m**.")
+            except: pass
+
     @discord.ui.button(label="Jewelry Store", style=discord.ButtonStyle.primary)
     async def jewelry(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id or self.selection_made: return
@@ -4554,6 +4563,15 @@ class CrimeDifficultyView(discord.ui.View):
         self.active_view = None
         self.is_over = False
         self.selection_made = False
+
+    async def on_timeout(self):
+        if not self.selection_made:
+            user_id = str(self.user_id)
+            jail_time = 15
+            await db.set_cooldown(user_id, "jail", datetime.now() + timedelta(minutes=jail_time))
+            try:
+                await self.ctx.send(f"🚨 <@{self.user_id}>, hesitation is fatal! You've been caught while deciding and jailed for **{jail_time}m**.")
+            except: pass
 
     @discord.ui.button(label="Easy", style=discord.ButtonStyle.success)
     async def easy(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4607,8 +4625,14 @@ class CrimeDifficultyView(discord.ui.View):
             else:
                 await inter.response.send_message(f"❌ Wrong zone! {max_attempts - attempts[0]} attempts left.", ephemeral=True)
 
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=30)
         self.active_view = view
+
+        async def on_timeout():
+            if not self.is_over:
+                await self.finish_heist(None, difficulty, False)
+        view.on_timeout = on_timeout
+
         for i in range(1, zone_count + 1):
             btn = discord.ui.Button(label=f"Zone {i}", style=discord.ButtonStyle.secondary)
             btn.callback = lambda inter, num=i: check_zone(inter, num)
@@ -4664,8 +4688,9 @@ class CrimeDifficultyView(discord.ui.View):
                 # Completed sequence
                 await self.finish_heist(inter, difficulty, True)
             else:
-                # Correct so far - no message sent as requested
-                await inter.response.defer()
+                # Correct so far - edit original message to show progress
+                embed.description = f"Enter the **{num_colors}** colors in the correct order!\n\n✅ Progress: **{len(user_sequence)}/{num_colors}**"
+                await inter.response.edit_message(embed=embed)
 
         view = discord.ui.View(timeout=15)
         self.active_view = view
@@ -4716,8 +4741,13 @@ class CrimeDifficultyView(discord.ui.View):
             else:
                 await inter.response.send_message(f"❌ Wrong number! {max_attempts - attempts[0]} attempts left.", ephemeral=True)
 
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=30)
         self.active_view = view
+
+        async def on_timeout():
+            if not self.is_over:
+                await self.finish_heist(None, difficulty, False)
+        view.on_timeout = on_timeout
         for number in range(1, int(range_text.split("-")[1]) + 1):
             btn = discord.ui.Button(label=str(number), style=discord.ButtonStyle.secondary)
             btn.callback = lambda inter, n=number: handle_guess(inter, n)
