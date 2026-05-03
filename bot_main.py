@@ -3820,9 +3820,17 @@ class PokerGame:
         return sum(1 for p in self.players.values() if not p['folded'])
 
     def next_player(self):
+        active_count = self.get_active_players_count()
+        if active_count <= 1:
+            return
+            
         self.current_player_index = (self.current_player_index + 1) % len(self.players)
+        # Prevent infinite loop if something is wrong
+        start_idx = self.current_player_index
         while self.players[self.get_current_player_id()]['folded'] or self.players[self.get_current_player_id()].get('all_in', False):
             self.current_player_index = (self.current_player_index + 1) % len(self.players)
+            if self.current_player_index == start_idx:
+                break
 
     def advance_round(self):
         if self.round == 'preflop':
@@ -3953,9 +3961,18 @@ class PokerView(discord.ui.View):
         try:
             uid = self.game.get_current_player_id()
             if uid and uid in self.game.players:
+                # If already folded, ignore
+                if self.game.players[uid]['folded']:
+                    return
+
                 self.game.players[uid]['folded'] = True
-                self.game.next_player()
-                await self.game.update_embed()
+                
+                # Check if game should end
+                if self.game.get_active_players_count() <= 1:
+                    await self.end_game_early(None)
+                else:
+                    self.game.next_player()
+                    await self.game.update_embed()
         except Exception as e:
             print(f"Poker timeout error: {e}")
 
@@ -4054,12 +4071,12 @@ class PokerView(discord.ui.View):
         result_embed.set_footer(text="This is a rough estimate based on visible cards")
         await interaction.edit_original_response(embed=result_embed)
 
-    async def end_game_early(self, interaction: discord.Interaction):
+    async def end_game_early(self, interaction: discord.Interaction = None):
         """End game when only 1 player remains"""
         self.game.stop()
-        for item in self.children:
-            item.disabled = True
-        
+        if interaction and not interaction.response.is_done():
+            await interaction.response.defer()
+            
         winner = None
         for uid, p in self.game.players.items():
             if not p['folded']:
@@ -4067,15 +4084,17 @@ class PokerView(discord.ui.View):
                 break
         
         if winner:
-            # Return all chips to the winner
             await db.update_balance(winner, self.game.pot)
-            
             embed = discord.Embed(
                 title="🏆 Game Over - Winner!",
                 description=f"<@{winner}> won **{self.game.pot:,}** 💰\n\nAll other players folded!",
                 color=0x2ECC71
             )
-            await self.game.message.edit(embed=embed, view=self)
+            try:
+                await self.game.message.edit(embed=embed, view=None)
+            except:
+                await self.game.ctx.send(embed=embed)
+                
             if self.game.ctx.channel.id in active_poker_games:
                 del active_poker_games[self.game.ctx.channel.id]
 
@@ -4517,7 +4536,7 @@ class BlackjackView(discord.ui.View):
 class HeistTargetView(discord.ui.View):
     def __init__(self, ctx):
         super().__init__(timeout=30)
-        self.ctx = ctx
+        self.ctx = ctx  
         self.user_id = ctx.author.id
         self.selection_made = False
 
