@@ -252,4 +252,17 @@ class BotDatabase:
         user = await self.db.users.find_one({"_id": user_id})
         return user.get("alive", True) if user else True
 
+    # ── DEBT TRACKING ────────────────────────
+    async def set_debt_since(self, user_id: str, timestamp: datetime):
+        """Set the time when user entered debt."""
+        if timestamp:
+            await self.db.users.update_one({"_id": user_id}, {"$set": {"debt_since": timestamp}}, upsert=True)
+        else:
+            await self.db.users.update_one({"_id": user_id}, {"$unset": {"debt_since": ""}})
+
+    async def get_debt_since(self, user_id: str) -> datetime:
+        """Get the time when user entered debt."""
+        user = await self.db.users.find_one({"_id": user_id})
+        return user.get("debt_since") if user else None
+
 db = BotDatabase()
