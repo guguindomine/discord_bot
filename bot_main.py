@@ -3917,6 +3917,9 @@ class PokerGame:
         return winners, hands
 
     async def update_embed(self):
+        if hasattr(self, 'view') and self.view:
+            self.view.stop()
+
         embed = discord.Embed(title="🃏 Paradox Poker", color=0x34495E)
         embed.add_field(name="Round", value=self.round.capitalize(), inline=True)
         embed.add_field(name="Pot", value=f"{self.pot:,} 💰", inline=True)
@@ -3953,7 +3956,7 @@ class PokerGame:
 
 class PokerView(discord.ui.View):
     def __init__(self, game):
-        super().__init__(timeout=60)
+        super().__init__(timeout=120)
         self.game = game
 
     async def on_timeout(self):
