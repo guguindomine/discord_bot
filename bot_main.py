@@ -559,23 +559,24 @@ class SupportTicketView(discord.ui.View):
 
 class HelpView(discord.ui.View):
     """View for the interactive help command."""
-    def __init__(self):
+    def __init__(self, is_admin: bool):
         super().__init__(timeout=180)
-        self.add_item(HelpSelect())
+        self.add_item(HelpSelect(is_admin))
 
 class HelpSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, is_admin: bool):
         options = [
-            discord.SelectOption(label="Setup & Config", description="Greetings, Roles, Logs & Channels", emoji="⚙️", value="setup"),
-            discord.SelectOption(label="Tickets & Apps", description="Support, Macros & Application setup", emoji="🎟️", value="tickets"),
-            discord.SelectOption(label="Server Boost", description="Rewards, Logs & Special Roles", emoji="💎", value="boost"),
-            discord.SelectOption(label="Moderation", description="Kick, Ban, Mute & Cleanup", emoji="🔨", value="mod"),
-            discord.SelectOption(label="Security & Filter", description="Anti-Scam, Quarantine & Swear Filter", emoji="🛡️", value="security"),
             discord.SelectOption(label="General & Stats", description="Polls, Info & Server data", emoji="📊", value="general"),
             discord.SelectOption(label="Economy & Casino", description="Gambling, Bank & Paradoxals", emoji="🪙", value="economy"),
             discord.SelectOption(label="Leveling & Ranks", description="XP, Levels & Kingdom Roles", emoji="🏆", value="leveling"),
-            discord.SelectOption(label="Social & Marriage", description="Marry, Hug, Kiss & Interactions", emoji="💖", value="social")
+            discord.SelectOption(label="Social & Marriage", description="Marry, Hug, Kiss & Interactions", emoji="💖", value="social"),
         ]
+
+        if is_admin:
+            options.insert(0, discord.SelectOption(label="Setup & Config", description="Greetings, Roles & Channels", emoji="⚙️", value="setup"))
+            options.insert(1, discord.SelectOption(label="Tickets & Apps", description="Support, Macros & Application setup", emoji="🎟️", value="tickets"))
+            options.insert(2, discord.SelectOption(label="Moderation & Security", description="Moderation tools & Filter system", emoji="🛡️", value="security"))
+            options.append(discord.SelectOption(label="Server Boost", description="Rewards, Logs & Special Roles", emoji="💎", value="boost"))
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -585,33 +586,31 @@ class HelpSelect(discord.ui.Select):
         embed = discord.Embed(color=0x9B59B6, timestamp=discord.utils.utcnow())
         
         if cat == "setup":
-            embed.title = "⚙️ Setup & Configuration"
+            embed.title = "⚙️ Server Setup Guide"
             embed.description = (
-                f"`{prefix}autorole <role>` - Set the auto-join role\n"
-                f"`{prefix}setwelcomechannel <#ch>` - Set where greetings go\n"
-                f"`{prefix}setlogchannel <#ch>` - Set where logs go\n"
-                f"`{prefix}setwelcome <msg>` - Set the join message\n"
-                f"`{prefix}setgoodbye <msg/channel>` - Set leave message or channel\n"
-                f"`{prefix}setimg <welcome/goodbye> <url>` - Set banners\n"
-                f"`{prefix}setcolor <hex>` - Set embed colors\n"
-                f"`{prefix}togglewelcome` - Enable/Disable greetings\n"
-                f"`{prefix}testjoin` / `{prefix}testleave` - Test greeting embeds\n\n"
-                f"**Note:** All settings are automatically synced to MongoDB! 🔄"
+                "I'm here to help you build the perfect server! Here are the core settings we can adjust together:\n\n"
+                f"`{prefix}autorole <role>` - Automatically give a role to new members\n"
+                f"`{prefix}setwelcomechannel <#ch>` - Choose where I should say hello\n"
+                f"`{prefix}setwelcome <msg>` - Tell me exactly what to say when someone joins\n"
+                f"`{prefix}setgoodbye <msg/channel>` - Configure how we say goodbye\n"
+                f"`{prefix}setimg <welcome/goodbye> <url>` - Add a beautiful banner to greetings\n"
+                f"`{prefix}setcolor <hex>` - Match my greeting colors to your server theme\n"
+                f"`{prefix}togglewelcome` - Turn the greeting system on or off\n"
+                f"`{prefix}testjoin` / `{prefix}testleave` - Let's see how the greetings look!\n\n"
+                f"**Tip:** All changes are saved instantly to our cloud database. 🔄"
             )
         elif cat == "tickets":
-            embed.title = "🎟️ Tickets & Helper Applications"
+            embed.title = "🎟️ Tickets & Applications"
             embed.description = (
-                f"`{prefix}setupticket <support/macro/carry/helper>` - Setup buttons\n"
-                f"`{prefix}addgame <ID> <Emoji> <Name>` - Add new game\n"
-                f"`{prefix}togglegame <ID>` - Toggle game active\n"
-                f"`{prefix}add / {prefix}remove <@user>` - Add/remove from ticket\n"
-                f"`{prefix}setticketcategory <id>` - Set category for new tickets\n"
-                f"`{prefix}setvouchchannel <#ch>` - Set where vouches go\n\n"
-                f"**Helper App Config (Advanced):**\n"
-                f"`{prefix}sethelpertext <id> <questions>` - Bulk replace\n"
-                f"`{prefix}sethelpertext <id> q1 Text ; q5 Text` - Target update\n"
-                f"`{prefix}sethelpertext <id> q3 remove` - Delete question 3\n"
-                f"**IDs:** `{', '.join(load_config().get('HELPER_GAMES', {}).keys())}`"
+                "Need an efficient way to handle support or applications? I can manage everything for you:\n\n"
+                f"`{prefix}setupticket <support/macro/carry/helper>` - Create interactive ticket buttons\n"
+                f"`{prefix}addgame <ID> <Emoji> <Name>` - Add games to the service list\n"
+                f"`{prefix}togglegame <ID>` - Quickly enable or disable a specific game\n"
+                f"`{prefix}add / {prefix}remove <@user>` - Manage who can see a ticket\n"
+                f"`{prefix}setticketcategory <id>` - Organize where I create new tickets\n"
+                f"`{prefix}setvouchchannel <#ch>` - Choose where satisfied users leave feedback\n\n"
+                f"**Helper Apps:**\n"
+                f"`{prefix}sethelpertext <id> <questions>` - Set up your application forms"
             )
         elif cat == "boost":
             embed.title = "💎 Server Boosting System"
@@ -623,47 +622,34 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setboostrole <role>` - Set auto-assigned boost role\n"
                 f"`{prefix}setboostmessage <msg>` - Set custom boost message"
             )
-        elif cat == "mod":
-            embed.title = "🔨 Advanced Moderation"
-            embed.description = (
-                f"`{prefix}purge <num>` - Delete bulk messages (1-100)\n"
-                f"`{prefix}mute <@user> <min>` - Timeout a member\n"
-                f"`{prefix}softban <@user>` - Kick & clear messages\n"
-                f"`{prefix}kick <@user> [reason]` - Kick a member\n"
-                f"`{prefix}ban <@user> [reason]` - Ban a member\n"
-                f"`{prefix}quarantine <@user>` - Send to quarantine manually\n"
-                f"`{prefix}unquarantine <@user>` - Release user from quarantine\n"
-                f"`{prefix}setrole <@user> <role>` - Give/Take a role from user\n"
-                f"`{prefix}listroles` - See all manageable roles\n"
-                f"`{prefix}goodbye` - Send a final manual farewell\n"
-                f"`{prefix}resetcd <@user>` - Reset a user's cooldowns (Owner)\n\n"
-                f"**Note:** Admin commands require administrator permissions."
-            )
         elif cat == "security":
-            embed.title = "🛡️ Security & Filter System"
+            embed.title = "🛡️ Moderation & Security"
             embed.description = (
-                f"`{prefix}togglefilter` - Toggle swear detection\n"
-                f"`{prefix}setthreshold <sys> <key> <val>` - Config punishment levels\n"
-                f"`{prefix}addscam <link>` - Add to phishing blacklist\n"
-                f"`{prefix}clearscamlog <@user>` - Reset scam strikes\n"
-                f"`{prefix}addswear <word>` - Add word to filter\n"
-                f"`{prefix}removeswear <word>` - Remove word from filter\n"
-                f"`{prefix}migrate <db/json>` - Move data between JSON & DB\n"
-                f"`{prefix}whitelist <add/remove/list>` - Swear filter bypass\n"
-                f"`{prefix}logwhitelist <add/remove/list>` - Invisible from logs\n"
-                f"`{prefix}unquarantine <@user>` - Release user from prison"
+                "Let's keep your server safe and organized! Here are the tools I use to protect the community:\n\n"
+                f"**Logging:**\n"
+                f"`{prefix}setlogchannel <#ch>` - Tell me where to log server events\n\n"
+                f"**Moderation Tools:**\n"
+                f"`{prefix}purge <num>` - Clean up chat messages\n"
+                f"`{prefix}mute <@user> <clause>` - Apply 1.x tiered punishments\n"
+                f"`{prefix}kick <@user> <clause>` - Remove a member with a rule clause\n"
+                f"`{prefix}ban <@user> <clause>` - Ban a member permanently\n"
+                f"`{prefix}quarantine <@user>` - Send someone to isolation\n"
+                f"`{prefix}unquarantine <@user>` - Release a user back to the server\n\n"
+                f"**Automated Protection:**\n"
+                f"`{prefix}togglefilter` - Turn the swear detection system on/off\n"
+                f"`{prefix}addscam <link>` / `{prefix}addswear <word>` - Update my blacklist\n"
+                f"`{prefix}whitelist <add/remove>` - Allow trusted users to bypass filters"
             )
         elif cat == "general":
-            embed.title = "📊 General & Stats"
+            embed.title = "📊 General & Statistics"
             embed.description = (
-                f"`{prefix}poll \"Question\" <time>` - Create interactive poll\n"
-                f"`{prefix}saycolor <color> <text>` - Send a colored message\n"
-                f"`{prefix}swearlog [@user]` - View infraction history/top\n"
-                f"`{prefix}vouches [@user]` - Check your vouch level\n"
-                f"`{prefix}setvouches [@user] <num>` - Set exact vouches\n"
-                f"`{prefix}botinfo` - See bot stats & features\n"
-                f"`{prefix}serverinfo` - See detailed server stats\n"
-                f"`{prefix}help paradox` - Open this menu"
+                "I can provide information and help you engage with your community:\n\n"
+                f"`{prefix}poll \"Question\" <time>` - Start a community vote\n"
+                f"`{prefix}botinfo` - Check my current health and stats\n"
+                f"`{prefix}serverinfo` - Get a detailed report on this server\n"
+                f"`{prefix}swearlog [@user]` - View moderation history\n"
+                f"`{prefix}vouches [@user]` - See reputation and vouch levels\n"
+                f"`{prefix}saycolor <color> <text>` - Make your messages stand out!"
             )
         elif cat == "economy":
             embed.title = "🪙 Paradoxy Economy"
@@ -1368,23 +1354,28 @@ async def help_cmd(ctx: commands.Context, *sub: str):
         await ctx.send(f"❓ Type `{PREFIX}help paradox` to open my interactive menu!")
         return
 
+    is_admin = ctx.author.guild_permissions.administrator or ctx.author.guild_permissions.manage_guild
+    
     embed = discord.Embed(
-        title="🤖 Paradox Bot | Main Menu",
+        title="🤖 Paradox Help Assistant",
         description=(
-            "Welcome to the **Paradox Help Center**!\n\n"
-            "Please use the **dropdown menu** below to select a category and view specialized commands and tutorials."
+            f"Hello **{ctx.author.name}**! I'm here to help you get the most out of Paradox.\n\n"
+            "Please select a category from the menu below to explore my commands. "
+            "If you're an admin, you'll see extra management sections!"
         ),
         color=0x9B59B6,
         timestamp=discord.utils.utcnow()
     )
-    embed.add_field(name="🛠️ Setup", value="Basic server configuration", inline=True)
-    embed.add_field(name="🎟️ Tickets", value="Support, Macros & Apps", inline=True)
-    embed.add_field(name="🛡️ Moderation", value="Kick, Ban, Mute & Cleanup", inline=True)
     
-    embed.set_footer(text="Developed for Paradox 💜")
+    if is_admin:
+        embed.add_field(name="⚙️ Management", value="Setup, Tickets & Moderation", inline=False)
+    
+    embed.add_field(name="🎮 Fun & Social", value="Economy, Games & Social Actions", inline=False)
+    
+    embed.set_footer(text="Guided by Paradox 💜")
     embed.set_thumbnail(url=bot.user.display_avatar.url)
     
-    await ctx.send(embed=embed, view=HelpView())
+    await ctx.send(embed=embed, view=HelpView(is_admin=is_admin))
 
 # ── !setupticket ─────────────────────────────
 
@@ -2235,27 +2226,73 @@ async def get_or_create_quarantine(guild):
         await channel.send("⚠️ **You have been placed in quarantine.**\nSpeak with the moderators here to appeal your punishment.")
     return role, channel
 
-async def apply_quarantine(member: discord.Member, reason: str):
+async def apply_quarantine(member: discord.Member, reason: str, expiry: datetime = None):
     """Saves roles, removes them, and adds Quarantined role."""
     guild = member.guild
-    cfg = load_config()
     
     # Save current roles (excluding @everyone and Quarantined)
     role_ids = [role.id for role in member.roles if not role.is_default() and role.name != QUARANTINE_ROLE_NAME]
     
     await db.save_quarantine_roles(str(member.id), role_ids)
+    if expiry:
+        await db.db.users.update_one({"_id": str(member.id)}, {"$set": {"quarantine_expiry": expiry}})
     
     role, ch = await get_or_create_quarantine(guild)
     
-    # Remove all removable roles and add quarantine
     try:
-        # We try to remove all roles at once
         roles_to_remove = [r for r in member.roles if not r.is_default() and r < guild.me.top_role]
         await member.remove_roles(*roles_to_remove, reason=f"Quarantine: {reason}")
         await member.add_roles(role, reason=f"Quarantine: {reason}")
     except:
-        # Fallback if bot permissions are tricky
         await member.add_roles(role)
+
+async def log_moderation(guild, action_text, reason):
+    """Logs moderation actions to the configured log channel."""
+    cfg = load_config()
+    log_ch_id = cfg.get("LOG_CHANNEL_ID")
+    if log_ch_id:
+        channel = guild.get_channel(int(log_ch_id))
+        if channel:
+            embed = discord.Embed(
+                title="🛡️ Moderation Log",
+                description=action_text,
+                color=0xE74C3C,
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="Reason", value=reason or "No reason provided")
+            embed.set_footer(text=f"Server: {guild.name}")
+            try:
+                await channel.send(embed=embed)
+            except: pass
+
+async def apply_tiered_moderation(ctx, member: discord.Member, clause: str, custom_reason: str = None):
+    """Handles 1.x tiered punishments."""
+    mapping = {
+        "1.1": {"action": "mute", "duration": 10, "label": "Rule 1.1 (Minor)"},
+        "1.2": {"action": "quarantine", "duration": 120, "label": "Rule 1.2 (Medium)"},
+        "1.3": {"action": "quarantine", "duration": None, "label": "Rule 1.3 (Severe)"}
+    }
+    
+    tier = mapping.get(clause)
+    if not tier:
+        return False
+        
+    action = tier["action"]
+    label = tier["label"]
+    reason = f"[{label}] {custom_reason}" if custom_reason else label
+    
+    if action == "mute":
+        await member.timeout(timedelta(minutes=tier["duration"]), reason=reason)
+        msg = f"🔇 **{member.display_name}** was muted for **10 minutes** under **{label}**."
+    elif action == "quarantine":
+        expiry = datetime.now() + timedelta(minutes=tier["duration"]) if tier["duration"] else None
+        await apply_quarantine(member, reason, expiry)
+        duration_str = "2 hours" if tier["duration"] else "Indefinite"
+        msg = f"⚖️ **{member.display_name}** was sent to **Quarantine** for **{duration_str}** under **{label}**."
+    
+    await ctx.send(msg)
+    await log_moderation(ctx.guild, msg, reason)
+    return True
 
 # ── MODERATION COMMANDS ───────────────────────
 
@@ -2269,17 +2306,32 @@ async def softban_cmd(ctx, member: discord.Member, *, reason="No reason provided
 
 @bot.command(name="mute")
 @commands.has_permissions(moderate_members=True)
-async def mute_cmd(ctx, member: discord.Member, minutes: int = 10, *, reason="No reason provided"):
-    """Timeout a member. Usage: !mute @user 10 reason"""
-    await member.timeout(timedelta(minutes=minutes), reason=reason)
-    await ctx.send(f"🔇 **{member.display_name}** was muted for {minutes} minutes.")
+async def mute_cmd(ctx, member: discord.Member, duration_or_clause: str = "10", *, reason: str = None):
+    """Timeout a member or apply 1.x clause. Usage: !mute @user 1.1 [reason] or !mute @user 10 [reason]"""
+    if await apply_tiered_moderation(ctx, member, duration_or_clause, reason):
+        return
+    
+    try:
+        minutes = int(duration_or_clause)
+    except:
+        minutes = 10
+        
+    await member.timeout(timedelta(minutes=minutes), reason=reason or "No reason provided")
+    msg = f"🔇 **{member.display_name}** was muted for **{minutes}** minutes."
+    await ctx.send(msg)
+    await log_moderation(ctx.guild, msg, reason)
 
 @bot.command(name="quarantine")
 @commands.has_permissions(administrator=True)
-async def quarantine_cmd(ctx, member: discord.Member):
-    """Manually send a member to quarantine. Admin only."""
-    await apply_quarantine(member, "Manual Moderator Action")
-    await ctx.send(f"⚖️ **{member.display_name}** has been sent to quarantine.")
+async def quarantine_cmd(ctx, member: discord.Member, clause: str = None, *, reason: str = None):
+    """Manually send a member to quarantine or apply clause. Admin only."""
+    if clause and await apply_tiered_moderation(ctx, member, clause, reason):
+        return
+        
+    await apply_quarantine(member, reason or "Manual Moderator Action")
+    msg = f"⚖️ **{member.display_name}** has been sent to quarantine."
+    await ctx.send(msg)
+    await log_moderation(ctx.guild, msg, reason)
 
 @bot.command(name="addscam")
 @commands.has_permissions(administrator=True)
@@ -2433,18 +2485,25 @@ async def purge_cmd(ctx: commands.Context, amount: int = 5):
 @bot.command(name="kick")
 @commands.has_permissions(kick_members=True)
 async def kick_cmd(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    """Kick a member. Mod only.
-    Usage: !kick @user reason
-    """
+    """Kick a member or apply 1.x clause. Usage: !kick @user 1.2 [reason]"""
+    parts = reason.split(" ", 1)
+    clause = parts[0]
+    extra_reason = parts[1] if len(parts) > 1 else None
+    
+    if await apply_tiered_moderation(ctx, member, clause, extra_reason):
+        return
+
     try:
         await member.kick(reason=reason)
+        msg = f"👢 **{member.name}** was kicked by {ctx.author.mention}"
         embed = discord.Embed(
             title="👢 Member Kicked",
-            description=f"**{member.name}** was kicked by {ctx.author.mention}\n**Reason:** {reason}",
+            description=f"{msg}\n**Reason:** {reason}",
             color=0xE67E22,
         )
         embed.set_footer(text="Paradox Bot 💜")
         await ctx.send(embed=embed)
+        await log_moderation(ctx.guild, msg, reason)
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to kick that user.")
 
@@ -2453,18 +2512,25 @@ async def kick_cmd(ctx: commands.Context, member: discord.Member, *, reason: str
 @bot.command(name="ban")
 @commands.has_permissions(ban_members=True)
 async def ban_cmd(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
-    """Ban a member. Admin only.
-    Usage: !ban @user reason
-    """
+    """Ban a member or apply 1.x clause. Usage: !ban @user 1.3 [reason]"""
+    parts = reason.split(" ", 1)
+    clause = parts[0]
+    extra_reason = parts[1] if len(parts) > 1 else None
+    
+    if await apply_tiered_moderation(ctx, member, clause, extra_reason):
+        return
+
     try:
         await member.ban(reason=reason)
+        msg = f"🔨 **{member.name}** was banned by {ctx.author.mention}"
         embed = discord.Embed(
             title="🔨 Member Banned",
-            description=f"**{member.name}** was banned by {ctx.author.mention}\n**Reason:** {reason}",
+            description=f"{msg}\n**Reason:** {reason}",
             color=0xE74C3C,
         )
         embed.set_footer(text="Paradox Bot 💜")
         await ctx.send(embed=embed)
+        await log_moderation(ctx.guild, msg, reason)
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to ban that user.")
 
@@ -2891,21 +2957,20 @@ def evaluate_poker_hand(hole_cards, community_cards):
     return (1, f"High Card ({ranks[0]})")
 
 class PokerGame:
-    def __init__(self, channel_id, min_buyin, max_buyin):
-        self.channel_id = channel_id
+    def __init__(self, creator_id, min_buyin, max_buyin):
+        self.creator_id = creator_id
         self.min_buyin = min_buyin
         self.max_buyin = max_buyin
-        self.players = [] # list of dicts: {id, name, stack, hand, bet, folded, all_in}
+        self.players = [] # {id, name, stack, hand, round_bet, total_contribution, folded, all_in}
         self.pot = 0
-        self.side_pots = [] # list of dicts: {amount, players_eligible}
         self.community_cards = []
         self.deck = []
         self.current_turn_idx = 0
-        self.round_phase = "pre-flop" # pre-flop, flop, turn, river, showdown
+        self.round_phase = "waiting" # waiting, pre-flop, flop, turn, river, showdown
         self.current_bet = 0
         self.min_raise = 0
         self.active = False
-        self.last_action_time = datetime.now()
+        self.message = None
 
     def create_deck(self):
         suits = ['♠', '♥', '♦', '♣']
@@ -2913,20 +2978,113 @@ class PokerGame:
         self.deck = [f"{r}{s}" for r in ranks for s in suits]
         random.shuffle(self.deck)
 
+    def get_player(self, user_id):
+        return next((p for p in self.players if p['id'] == user_id), None)
+
+    async def add_player(self, user, amount):
+        if self.get_player(user.id): return False
+        if amount < self.min_buyin or amount > self.max_buyin: return False
+        
+        # Immediate wallet decrement
+        balance = await db.get_balance(str(user.id))
+        if balance < amount: return False
+        
+        await db.update_balance(str(user.id), -amount)
+        self.players.append({
+            "id": user.id, "name": user.display_name, "stack": amount,
+            "hand": [], "round_bet": 0, "total_contribution": amount,
+            "folded": False, "all_in": False
+        })
+        self.pot += 0 # Pot only increases during betting rounds from the stack? 
+        # Actually, buy-in goes to the player's stack. Pot is built from bets.
+        return True
+
 class PokerView(discord.ui.View):
     def __init__(self, game):
         super().__init__(timeout=600)
         self.game = game
 
+    def create_embed(self):
+        embed = discord.Embed(title="🃏 Paradox Poker Table", color=0x2ECC71)
+        
+        status_text = f"**Phase:** {self.game.round_phase.upper()}\n"
+        status_text += f"**Pot:** {self.game.pot:,} {CURRENCY_NAME}\n"
+        if self.game.community_cards:
+            status_text += f"**Board:** {' '.join(self.game.community_cards)}\n"
+        
+        embed.description = status_text
+        
+        player_list = ""
+        for i, p in enumerate(self.game.players):
+            turn_marker = "➡️ " if i == self.game.current_turn_idx and self.game.active else ""
+            fold_marker = "❌ " if p['folded'] else ""
+            player_list += f"{turn_marker}{fold_marker}**{p['name']}**: {p['stack']:,} (Bet: {p['round_bet']:,})\n"
+        
+        embed.add_field(name="Players", value=player_list or "Waiting for players...", inline=False)
+        embed.set_footer(text=f"Min Buy-in: {self.game.min_buyin:,} | Max: {self.game.max_buyin:,}")
+        return embed
+
     @discord.ui.button(label="Join Game", style=discord.ButtonStyle.success)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Placeholder
-        pass
+        if self.game.active:
+            return await interaction.response.send_message("❌ Game already started!", ephemeral=True)
+        
+        # Simple modal or just fixed amount for now? User said "buy-in is set by the creator".
+        # I'll just use min_buyin for simplicity in the button, or better:
+        await interaction.response.send_message(f"To join, type `!poker join <amount>` in this channel.", ephemeral=True)
+
+    @discord.ui.button(label="Start Game", style=discord.ButtonStyle.primary)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.game.creator_id:
+            return await interaction.response.send_message("❌ Only the creator can start!", ephemeral=True)
+        if len(self.game.players) < 2:
+            return await interaction.response.send_message("❌ Need at least 2 players!", ephemeral=True)
+        
+        self.game.active = True
+        self.game.round_phase = "pre-flop"
+        self.game.create_deck()
+        
+        # Deal cards
+        for p in self.game.players:
+            p['hand'] = [self.game.deck.pop(), self.game.deck.pop()]
+        
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
     @discord.ui.button(label="Check Hand", style=discord.ButtonStyle.secondary)
     async def check_hand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Placeholder
-        pass
+        p = self.game.get_player(interaction.user.id)
+        if not p or not p['hand']:
+            return await interaction.response.send_message("❌ You are not in the game!", ephemeral=True)
+        
+        await interaction.response.send_message(f"Your cards: **{' '.join(p['hand'])}**", ephemeral=True)
+
+@bot.command(name="poker")
+async def poker_cmd(ctx, min_buyin: int = 1000, max_buyin: int = 100000):
+    """Start a new poker session."""
+    game = PokerGame(ctx.author.id, min_buyin, max_buyin)
+    view = PokerView(game)
+    msg = await ctx.send(embed=view.create_embed(), view=view)
+    game.message = msg
+    
+    # Store game in a global dict or similar to handle join commands
+    if not hasattr(bot, 'active_poker_games'):
+        bot.active_poker_games = {}
+    bot.active_poker_games[ctx.channel.id] = game
+
+@bot.command(name="pjoin")
+async def poker_join_cmd(ctx, amount: int):
+    """Join an active poker game in the channel."""
+    game = getattr(bot, 'active_poker_games', {}).get(ctx.channel.id)
+    if not game:
+        return await ctx.send("❌ No active poker game in this channel.")
+    
+    if await game.add_player(ctx.author, amount):
+        await ctx.send(f"✅ {ctx.author.mention} joined the table with {amount:,} {CURRENCY_NAME}!")
+        # Update table message
+        view = PokerView(game)
+        await game.message.edit(embed=view.create_embed(), view=view)
+    else:
+        await ctx.send("❌ Failed to join. Check your balance or buy-in limits.")
 
 # ══════════════════════════════════════════════
 #  HEIST MINIGAMES
@@ -5034,7 +5192,7 @@ SOCIAL_MESSAGES = {
     "punch": {"msgs": ["{author} punched {target} square in the face!", "{author} gave {target} a quick jab!"], "color": 0xE74C3C, "emoji": "🤜"},
     "slap": {"msgs": ["{author} slapped {target} with a wet noodle!", "{author} slapped {target}! *SMACK*"], "color": 0xE74C3C, "emoji": "✋"},
     "kick": {"msgs": ["{author} sent {target} flying with a powerful kick!"], "color": 0xE74C3C, "emoji": "🦵"},
-    "bite": {"msgs": ["{author} gave {target} a playful love bite!"], "color": 0xE74C3C, "emoji": "🦷"},
+    "bite": {"msgs": ["{author} bit {target}! Ouch!", "{author} gave {target} a playful love bite!"], "color": 0xE74C3C, "emoji": "🦷"},
     "bully": {"msgs": ["{author} is stuffing {target} into a locker!"], "color": 0x34495E, "emoji": "💢"},
     "bonk": {"msgs": ["{author} bonked {target} on the head with a hammer!"], "color": 0xF1C40F, "emoji": "🔨"},
     "stab": {"msgs": ["{author} stabbed {target} with a plastic spoon!"], "color": 0xE74C3C, "emoji": "🔪"},
@@ -5057,15 +5215,42 @@ SOCIAL_MESSAGES = {
     "tackle": {"msgs": ["{author} tackled {target} to the ground! 🏈"], "color": 0xE67E22, "emoji": "🤸"},
     "wave": {"msgs": ["{author} waved at {target}. Hello there!"], "color": 0x3498DB, "emoji": "👋"},
     "dance": {"msgs": ["{author} is dancing with {target}! 💃🕺"], "color": 0x9B59B6, "emoji": "💃"},
+    "snuggle": {"msgs": ["{author} snuggled up close to {target}!"], "color": 0xFF69B4, "emoji": "🧸"},
+    "stare": {"msgs": ["{author} is staring intensely at {target}..."], "color": 0x34495E, "emoji": "👀"},
+    "scare": {"msgs": ["{author} jumped out and scared {target}! BAA!"], "color": 0x9B59B6, "emoji": "👻"},
+    "dodge": {"msgs": ["{author} smoothly dodged {target}'s attack!"], "color": 0x2ECC71, "emoji": "💨"},
+    "flex": {"msgs": ["{author} is flexing their muscles at {target}! 💪"], "color": 0xF1C40F, "emoji": "💪"},
 }
 async def send_social_embed(ctx, target, action):
     data = SOCIAL_MESSAGES.get(action)
     if not data: return
+    
+    # Load GIF from config
+    gifs = load_config().get("ACTION_GIFS", {})
+    gif_url = gifs.get(action)
+    
     import random
     msg_tpl = random.choice(data["msgs"])
     desc = msg_tpl.replace("{author}", ctx.author.mention).replace("{target}", target.mention)
     embed = discord.Embed(description=f"{data['emoji']} {desc}", color=data["color"])
+    
+    if gif_url:
+        embed.set_image(url=gif_url)
+        
     await ctx.send(embed=embed)
+
+@bot.command(name="setgif")
+@commands.has_permissions(administrator=True)
+async def setgif_cmd(ctx: commands.Context, action: str, url: str):
+    """Set a GIF for a social or flavor action. Usage: !setgif <action> <url>"""
+    cfg = load_config()
+    if "ACTION_GIFS" not in cfg:
+        cfg["ACTION_GIFS"] = {}
+    
+    action_key = action.lower()
+    cfg["ACTION_GIFS"][action_key] = url
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ GIF for **{action_key}** has been updated!")
 @bot.command(name="punch")
 async def punch_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "punch")
 @bot.command(name="slap")
@@ -5116,6 +5301,16 @@ async def tackle_cmd(ctx, target: discord.Member): await send_social_embed(ctx, 
 async def wave_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "wave")
 @bot.command(name="dance")
 async def dance_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "dance")
+@bot.command(name="snuggle")
+async def snuggle_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "snuggle")
+@bot.command(name="stare")
+async def stare_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "stare")
+@bot.command(name="scare")
+async def scare_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "scare")
+@bot.command(name="dodge")
+async def dodge_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "dodge")
+@bot.command(name="flex")
+async def flex_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "flex")
 # ── MARRIAGE SYSTEM ───────────────────────────
 class MarriageProposalView(discord.ui.View):
     def __init__(self, requester, target):
