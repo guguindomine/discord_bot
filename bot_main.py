@@ -2903,188 +2903,11 @@ async def migrate_cmd(ctx: commands.Context, arg: str = None):
     else:
         await ctx.send("❓ Usage: `!migrate db` (Import to DB) or `!migrate json` (Export to JSON)")
 
-# ══════════════════════════════════════════════
-#  POKER SYSTEM (ADVANCED)
-# ══════════════════════════════════════════════
+# Poker evaluation logic is consolidated in the main Poker section below.
 
-def evaluate_poker_hand(hole_cards, community_cards):
-    """Evaluate poker hand and return (rank, description)."""
-    all_cards = hole_cards + community_cards
-    ranks = []
-    suits = []
-    for card in all_cards:
-        rank = card[:-1]
-        suit = card[-1]
-        if rank == '10': val = 10
-        elif rank == 'J': val = 11
-        elif rank == 'Q': val = 12
-        elif rank == 'K': val = 13
-        elif rank == 'A': val = 14
-        else: val = int(rank)
-        ranks.append(val)
-        suits.append(suit)
+# Removed duplicate Poker implementation to resolve registration error.
+# The main Poker logic is located later in the file (lines 3829+).
 
-    ranks.sort(reverse=True)
-    
-    # Hand ranking logic
-    is_flush = any(suits.count(s) >= 5 for s in set(suits))
-    
-    unique_ranks = sorted(list(set(ranks)), reverse=True)
-    is_straight = False
-    straight_high = 0
-    for i in range(len(unique_ranks) - 4):
-        if unique_ranks[i] - unique_ranks[i+4] == 4:
-            is_straight = True
-            straight_high = unique_ranks[i]
-            break
-    # Ace-low straight
-    if not is_straight and {14, 2, 3, 4, 5}.issubset(set(ranks)):
-        is_straight = True
-        straight_high = 5
-
-    counts = {r: ranks.count(r) for r in set(ranks)}
-    sorted_counts = sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
-    
-    if is_flush and is_straight and straight_high == 14: return (10, "Royal Flush")
-    if is_flush and is_straight: return (9, f"Straight Flush ({straight_high} high)")
-    if sorted_counts[0][1] == 4: return (8, f"Four of a Kind ({sorted_counts[0][0]}s)")
-    if sorted_counts[0][1] == 3 and sorted_counts[1][1] >= 2: return (7, f"Full House ({sorted_counts[0][0]}s over {sorted_counts[1][0]}s)")
-    if is_flush: return (6, "Flush")
-    if is_straight: return (5, f"Straight ({straight_high} high)")
-    if sorted_counts[0][1] == 3: return (4, f"Three of a Kind ({sorted_counts[0][0]}s)")
-    if sorted_counts[0][1] == 2 and sorted_counts[1][1] == 2: return (3, f"Two Pair ({sorted_counts[0][0]}s and {sorted_counts[1][0]}s)")
-    if sorted_counts[0][1] == 2: return (2, f"Pair of {sorted_counts[0][0]}s")
-    return (1, f"High Card ({ranks[0]})")
-
-class PokerGame:
-    def __init__(self, creator_id, min_buyin, max_buyin):
-        self.creator_id = creator_id
-        self.min_buyin = min_buyin
-        self.max_buyin = max_buyin
-        self.players = [] # {id, name, stack, hand, round_bet, total_contribution, folded, all_in}
-        self.pot = 0
-        self.community_cards = []
-        self.deck = []
-        self.current_turn_idx = 0
-        self.round_phase = "waiting" # waiting, pre-flop, flop, turn, river, showdown
-        self.current_bet = 0
-        self.min_raise = 0
-        self.active = False
-        self.message = None
-
-    def create_deck(self):
-        suits = ['♠', '♥', '♦', '♣']
-        ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
-        self.deck = [f"{r}{s}" for r in ranks for s in suits]
-        random.shuffle(self.deck)
-
-    def get_player(self, user_id):
-        return next((p for p in self.players if p['id'] == user_id), None)
-
-    async def add_player(self, user, amount):
-        if self.get_player(user.id): return False
-        if amount < self.min_buyin or amount > self.max_buyin: return False
-        
-        # Immediate wallet decrement
-        balance = await db.get_balance(str(user.id))
-        if balance < amount: return False
-        
-        await db.update_balance(str(user.id), -amount)
-        self.players.append({
-            "id": user.id, "name": user.display_name, "stack": amount,
-            "hand": [], "round_bet": 0, "total_contribution": amount,
-            "folded": False, "all_in": False
-        })
-        self.pot += 0 # Pot only increases during betting rounds from the stack? 
-        # Actually, buy-in goes to the player's stack. Pot is built from bets.
-        return True
-
-class PokerView(discord.ui.View):
-    def __init__(self, game):
-        super().__init__(timeout=600)
-        self.game = game
-
-    def create_embed(self):
-        embed = discord.Embed(title="🃏 Paradox Poker Table", color=0x2ECC71)
-        
-        status_text = f"**Phase:** {self.game.round_phase.upper()}\n"
-        status_text += f"**Pot:** {self.game.pot:,} {CURRENCY_NAME}\n"
-        if self.game.community_cards:
-            status_text += f"**Board:** {' '.join(self.game.community_cards)}\n"
-        
-        embed.description = status_text
-        
-        player_list = ""
-        for i, p in enumerate(self.game.players):
-            turn_marker = "➡️ " if i == self.game.current_turn_idx and self.game.active else ""
-            fold_marker = "❌ " if p['folded'] else ""
-            player_list += f"{turn_marker}{fold_marker}**{p['name']}**: {p['stack']:,} (Bet: {p['round_bet']:,})\n"
-        
-        embed.add_field(name="Players", value=player_list or "Waiting for players...", inline=False)
-        embed.set_footer(text=f"Min Buy-in: {self.game.min_buyin:,} | Max: {self.game.max_buyin:,}")
-        return embed
-
-    @discord.ui.button(label="Join Game", style=discord.ButtonStyle.success)
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.game.active:
-            return await interaction.response.send_message("❌ Game already started!", ephemeral=True)
-        
-        # Simple modal or just fixed amount for now? User said "buy-in is set by the creator".
-        # I'll just use min_buyin for simplicity in the button, or better:
-        await interaction.response.send_message(f"To join, type `!poker join <amount>` in this channel.", ephemeral=True)
-
-    @discord.ui.button(label="Start Game", style=discord.ButtonStyle.primary)
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.game.creator_id:
-            return await interaction.response.send_message("❌ Only the creator can start!", ephemeral=True)
-        if len(self.game.players) < 2:
-            return await interaction.response.send_message("❌ Need at least 2 players!", ephemeral=True)
-        
-        self.game.active = True
-        self.game.round_phase = "pre-flop"
-        self.game.create_deck()
-        
-        # Deal cards
-        for p in self.game.players:
-            p['hand'] = [self.game.deck.pop(), self.game.deck.pop()]
-        
-        await interaction.response.edit_message(embed=self.create_embed(), view=self)
-
-    @discord.ui.button(label="Check Hand", style=discord.ButtonStyle.secondary)
-    async def check_hand(self, interaction: discord.Interaction, button: discord.ui.Button):
-        p = self.game.get_player(interaction.user.id)
-        if not p or not p['hand']:
-            return await interaction.response.send_message("❌ You are not in the game!", ephemeral=True)
-        
-        await interaction.response.send_message(f"Your cards: **{' '.join(p['hand'])}**", ephemeral=True)
-
-@bot.command(name="poker")
-async def poker_cmd(ctx, min_buyin: int = 1000, max_buyin: int = 100000):
-    """Start a new poker session."""
-    game = PokerGame(ctx.author.id, min_buyin, max_buyin)
-    view = PokerView(game)
-    msg = await ctx.send(embed=view.create_embed(), view=view)
-    game.message = msg
-    
-    # Store game in a global dict or similar to handle join commands
-    if not hasattr(bot, 'active_poker_games'):
-        bot.active_poker_games = {}
-    bot.active_poker_games[ctx.channel.id] = game
-
-@bot.command(name="pjoin")
-async def poker_join_cmd(ctx, amount: int):
-    """Join an active poker game in the channel."""
-    game = getattr(bot, 'active_poker_games', {}).get(ctx.channel.id)
-    if not game:
-        return await ctx.send("❌ No active poker game in this channel.")
-    
-    if await game.add_player(ctx.author, amount):
-        await ctx.send(f"✅ {ctx.author.mention} joined the table with {amount:,} {CURRENCY_NAME}!")
-        # Update table message
-        view = PokerView(game)
-        await game.message.edit(embed=view.create_embed(), view=view)
-    else:
-        await ctx.send("❌ Failed to join. Check your balance or buy-in limits.")
 
 # ══════════════════════════════════════════════
 #  HEIST MINIGAMES
@@ -3953,7 +3776,7 @@ class PokerGame:
             'chips': buyin, 
             'all_in': False
         }
-        self.pot += buyin
+        # Pot remains 0 at join; it builds from bets.
         return True
 
     def start_game(self):
@@ -4075,39 +3898,43 @@ class PokerGame:
         return winners, hands
 
     async def update_embed(self):
-        if hasattr(self, 'view') and self.view:
-            self.view.stop()
-
-        embed = discord.Embed(title="🃏 Paradox Poker", color=0x34495E)
-        embed.add_field(name="Round", value=self.round.capitalize(), inline=True)
-        embed.add_field(name="Pot", value=f"{self.pot:,} 💰", inline=True)
-        embed.add_field(name="Bet to Call", value=f"{self.current_bet:,} 💰", inline=True)
+        # We don't stop the view if we are just editing, unless we want to refresh buttons.
+        # However, it's cleaner to keep the view active.
+        
+        embed = discord.Embed(title="🃏 Paradox Poker Table", color=0x2ECC71)
+        embed.add_field(name="Round Phase", value=f"**{self.round.upper()}**", inline=True)
+        embed.add_field(name="Current Pot", value=f"**{self.pot:,}** {CURRENCY_NAME}", inline=True)
+        embed.add_field(name="Bet to Call", value=f"**{self.current_bet:,}** {CURRENCY_NAME}", inline=True)
         
         if self.community_cards:
-            embed.add_field(name="Community", value=" ".join(self.community_cards), inline=False)
+            embed.add_field(name="Community Cards", value=" ".join(self.community_cards), inline=False)
         
         players_text = ""
         for uid, p in self.players.items():
+            turn_marker = "➡️ " if str(uid) == self.get_current_player_id() and self.round != 'waiting' else ""
             if p['folded']:
                 status = "❌ Folded"
             elif p.get('all_in', False):
-                status = f"🔴 **All-In** | Chips in: {p['bet']:,}"
+                status = f"🔴 **All-In** ({p['bet']:,})"
             else:
-                status = f"Chips: {p['chips']:,} | Bet: {p['bet']:,}"
-            players_text += f"<@{uid}>: {status}\n"
-        embed.add_field(name="Players", value=players_text, inline=False)
+                status = f"Stack: {p['chips']:,} | Bet: {p['bet']:,}"
+            players_text += f"{turn_marker}<@{uid}>: {status}\n"
+        embed.add_field(name="Players", value=players_text or "No players joined.", inline=False)
         
         active_count = self.get_active_players_count()
-        if active_count > 1:
+        if active_count > 1 and self.round != 'showdown' and self.round != 'waiting':
             current_player = self.get_current_player_id()
-            embed.add_field(name="⏸️ Your Turn", value=f"<@{current_player}>", inline=False)
+            embed.add_field(name="⏸️ Current Turn", value=f"<@{current_player}>", inline=False)
         
-        self.view = PokerView(self)
+        if not self.view:
+            self.view = PokerView(self)
+
         try:
-            await self.message.delete()
-        except:
-            pass
-        self.message = await self.ctx.send(embed=embed, view=self.view)
+            # Use edit instead of delete/send to keep table history clean
+            await self.message.edit(embed=embed, view=self.view)
+        except Exception as e:
+            # Fallback if message was deleted
+            self.message = await self.ctx.send(embed=embed, view=self.view)
 
     def stop(self):
         self.view.stop()
@@ -4469,6 +4296,40 @@ async def poker_start_handler(ctx: commands.Context):
         await game.update_embed()
     else:
         await ctx.send("❌ Failed to start game.")
+
+@bot.command(name="pokerforfeit", aliases=["pokerleave", "pforfeit"])
+@commands.cooldown(1, 5, commands.BucketType.user)
+async def poker_forfeit_cmd(ctx: commands.Context):
+    """Leave the poker game and forfeit your chips to the pot."""
+    channel_id = ctx.channel.id
+    if channel_id not in active_poker_games:
+        return await ctx.send("❌ No active poker game in this channel.")
+    
+    game = active_poker_games[channel_id]
+    user_id = str(ctx.author.id)
+    if user_id not in game.players:
+        return await ctx.send("❌ You are not in the game.")
+    
+    player = game.players[user_id]
+    if player['folded']:
+        return await ctx.send("❌ You already folded.")
+
+    player['folded'] = True
+    game.pot += player['chips']
+    player['chips'] = 0
+    
+    await ctx.send(f"🏳️ **{ctx.author.display_name}** has forfeited! Their chips were added to the pot.")
+    
+    if game.get_active_players_count() <= 1:
+        # End game if only 1 left
+        # We need to find the view or create one to end
+        if not game.view:
+            game.view = PokerView(game)
+        await game.view.end_game_early(None)
+    else:
+        if str(ctx.author.id) == game.get_current_player_id():
+            game.next_player()
+        await game.update_embed()
 
 # ── BLACKJACK SYSTEM ──────────────────────────
 
@@ -5311,6 +5172,43 @@ async def scare_cmd(ctx, target: discord.Member): await send_social_embed(ctx, t
 async def dodge_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "dodge")
 @bot.command(name="flex")
 async def flex_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "flex")
+
+# ── FLAVOR MODERATION ──────────────────────────
+@bot.command(name="blast")
+@commands.has_permissions(moderate_members=True)
+async def blast_cmd(ctx, member: discord.Member, *, reason: str = "Blasted!"):
+    """Mute a member with a blast GIF. Mod only."""
+    await member.timeout(timedelta(minutes=10), reason=reason)
+    gifs = load_config().get("ACTION_GIFS", {})
+    gif_url = gifs.get("blast", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/lT4Ix992z2zfO/giphy.gif")
+    embed = discord.Embed(title="💥 BLASTED!", description=f"{member.mention} was blasted away for 10 minutes!", color=0xE74C3C)
+    embed.set_image(url=gif_url)
+    await ctx.send(embed=embed)
+    await log_moderation(ctx.guild, f"💥 {member.name} was blasted (10m mute)", reason)
+
+@bot.command(name="rct")
+@commands.has_permissions(moderate_members=True)
+async def rct_cmd(ctx, member: discord.Member):
+    """Unmute a member with a recovery GIF. Mod only."""
+    await member.timeout(None, reason="RCT Recovery")
+    gifs = load_config().get("ACTION_GIFS", {})
+    gif_url = gifs.get("rct", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKVUn7iM8FMEU24/giphy.gif")
+    embed = discord.Embed(title="✨ RECOVERED!", description=f"{member.mention} was brought back into the timeline!", color=0x2ECC71)
+    embed.set_image(url=gif_url)
+    await ctx.send(embed=embed)
+    await log_moderation(ctx.guild, f"✨ {member.name} was recovered (unmute)", "RCT")
+
+@bot.command(name="annihilate")
+@commands.has_permissions(ban_members=True)
+async def annihilate_cmd(ctx, member: discord.Member, *, reason: str = "Annihilated!"):
+    """Ban a member with an annihilation GIF. Admin only."""
+    await member.ban(reason=reason)
+    gifs = load_config().get("ACTION_GIFS", {})
+    gif_url = gifs.get("annihilate", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/XzkGfSRJQCxgI/giphy.gif")
+    embed = discord.Embed(title="☄️ ANNIHILATED!", description=f"{member.name} has been erased from existence!", color=0x000000)
+    embed.set_image(url=gif_url)
+    await ctx.send(embed=embed)
+    await log_moderation(ctx.guild, f"☄️ {member.name} was annihilated (ban)", reason)
 # ── MARRIAGE SYSTEM ───────────────────────────
 class MarriageProposalView(discord.ui.View):
     def __init__(self, requester, target):
