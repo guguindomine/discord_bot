@@ -5125,11 +5125,12 @@ async def setgif_cmd(ctx: commands.Context, action: str, url: str):
     action_key = action.lower()
     cfg["ACTION_GIFS"][action_key] = url
     
-    # Update global config as well
-    config = cfg
-    
     await save_config_sync(cfg)
-    await ctx.send(f"✅ GIF for **{action_key}** has been updated and applied!")
+    
+    # Send a preview to confirm Discord can load it
+    preview = discord.Embed(title="🖼️ GIF Preview", description=f"This is how the GIF will look for **{action_key}**:", color=0x2ECC71)
+    preview.set_image(url=url)
+    await ctx.send(f"✅ GIF for **{action_key}** has been updated and applied!", embed=preview)
 @bot.command(name="punch")
 async def punch_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "punch")
 @bot.command(name="slap")
@@ -5197,9 +5198,8 @@ async def flex_cmd(ctx, target: discord.Member): await send_social_embed(ctx, ta
 async def blast_cmd(ctx, member: discord.Member, *, reason: str = "Blasted!"):
     """Mute a member with a blast GIF. Mod only."""
     await member.timeout(timedelta(minutes=10), reason=reason)
-    # Reload config to get latest GIFs
-    cfg = load_config()
-    gifs = cfg.get("ACTION_GIFS", {})
+    # Use global config for reliability
+    gifs = config.get("ACTION_GIFS", {})
     gif_url = gifs.get("blast", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/lT4Ix992z2zfO/giphy.gif")
     
     embed = discord.Embed(title="💥 BLASTED!", description=f"{member.mention} was blasted away for 10 minutes!", color=0xE74C3C)
@@ -5214,9 +5214,8 @@ async def blast_cmd(ctx, member: discord.Member, *, reason: str = "Blasted!"):
 async def rct_cmd(ctx, member: discord.Member):
     """Unmute a member with a recovery GIF. Mod only."""
     await member.timeout(None, reason="RCT Recovery")
-    # Reload config to get latest GIFs
-    cfg = load_config()
-    gifs = cfg.get("ACTION_GIFS", {})
+    # Use global config for reliability
+    gifs = config.get("ACTION_GIFS", {})
     gif_url = gifs.get("rct", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKVUn7iM8FMEU24/giphy.gif")
     
     embed = discord.Embed(title="✨ RECOVERED!", description=f"{member.mention} was brought back into the timeline!", color=0x2ECC71)
@@ -5231,9 +5230,8 @@ async def rct_cmd(ctx, member: discord.Member):
 async def annihilate_cmd(ctx, member: discord.Member, *, reason: str = "Annihilated!"):
     """Ban a member with an annihilation GIF. Admin only."""
     await member.ban(reason=reason)
-    # Reload config to get latest GIFs
-    cfg = load_config()
-    gifs = cfg.get("ACTION_GIFS", {})
+    # Use global config for reliability
+    gifs = config.get("ACTION_GIFS", {})
     gif_url = gifs.get("annihilate", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/XzkGfSRJQCxgI/giphy.gif")
     
     embed = discord.Embed(title="☄️ ANNIHILATED!", description=f"{member.name} has been erased from existence!", color=0x000000)
