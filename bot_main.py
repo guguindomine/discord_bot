@@ -49,6 +49,8 @@ from bot_database import db
 
 async def save_config_sync(cfg: dict):
     """Save config to both config.json and MongoDB."""
+    global config
+    config = cfg
     save_config(cfg)
     if db.db is not None:
         try:
@@ -5124,6 +5126,9 @@ async def setgif_cmd(ctx: commands.Context, action: str, url: str):
     
     action_key = action.lower()
     cfg["ACTION_GIFS"][action_key] = url
+    
+    # Update global config for immediate use
+    config = cfg
     
     await save_config_sync(cfg)
     
