@@ -638,7 +638,11 @@ class HelpSelect(discord.ui.Select):
                 f"**Automated Protection:**\n"
                 f"`{prefix}togglefilter` - Turn the swear detection system on/off\n"
                 f"`{prefix}addscam <link>` / `{prefix}addswear <word>` - Update my blacklist\n"
-                f"`{prefix}whitelist <add/remove>` - Allow trusted users to bypass filters"
+                f"`{prefix}whitelist <add/remove>` - Allow trusted users to bypass filters\n\n"
+                f"**Flavor Moderation:**\n"
+                f"`{prefix}blast <@user>` - 10m mute with a boom\n"
+                f"`{prefix}rct` / `rcs` / `unmute` <@user> - Recovery/Unmute\n"
+                f"`{prefix}annihilate <@user>` - Permanent ban with style"
             )
         elif cat == "general":
             embed.title = "📊 General & Statistics"
@@ -5186,7 +5190,7 @@ async def blast_cmd(ctx, member: discord.Member, *, reason: str = "Blasted!"):
     await ctx.send(embed=embed)
     await log_moderation(ctx.guild, f"💥 {member.name} was blasted (10m mute)", reason)
 
-@bot.command(name="rct")
+@bot.command(name="rct", aliases=["rcs", "unmute"])
 @commands.has_permissions(moderate_members=True)
 async def rct_cmd(ctx, member: discord.Member):
     """Unmute a member with a recovery GIF. Mod only."""
