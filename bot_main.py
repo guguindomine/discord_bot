@@ -595,6 +595,7 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}setgoodbye <msg/channel>` - Configure how we say goodbye\n"
                 f"`{prefix}setimg <welcome/goodbye> <url>` - Add a beautiful banner to greetings\n"
                 f"`{prefix}setcolor <hex>` - Match my greeting colors to your server theme\n"
+                f"`{prefix}setgif <action> <url>` - Set GIFs for social/mod actions\n"
                 f"`{prefix}togglewelcome` - Turn the greeting system on or off\n"
                 f"`{prefix}testjoin` / `{prefix}testleave` - Let's see how the greetings look!\n\n"
                 f"**Tip:** All changes are saved instantly to our cloud database. 🔄"
@@ -5111,14 +5112,24 @@ async def send_social_embed(ctx, target, action):
 @commands.has_permissions(administrator=True)
 async def setgif_cmd(ctx: commands.Context, action: str, url: str):
     """Set a GIF for a social or flavor action. Usage: !setgif <action> <url>"""
+    global config
     cfg = load_config()
+    
+    # Auto-fix common Tenor link issues
+    if "tenor.com/view/" in url and not url.endswith(".gif"):
+        return await ctx.send("❌ **Invalid Link!** Please right-click the GIF and select 'Copy Image Link'. The link should end in `.gif`.")
+
     if "ACTION_GIFS" not in cfg:
         cfg["ACTION_GIFS"] = {}
     
     action_key = action.lower()
     cfg["ACTION_GIFS"][action_key] = url
+    
+    # Update global config as well
+    config = cfg
+    
     await save_config_sync(cfg)
-    await ctx.send(f"✅ GIF for **{action_key}** has been updated!")
+    await ctx.send(f"✅ GIF for **{action_key}** has been updated and applied!")
 @bot.command(name="punch")
 async def punch_cmd(ctx, target: discord.Member): await send_social_embed(ctx, target, "punch")
 @bot.command(name="slap")
@@ -5186,10 +5197,15 @@ async def flex_cmd(ctx, target: discord.Member): await send_social_embed(ctx, ta
 async def blast_cmd(ctx, member: discord.Member, *, reason: str = "Blasted!"):
     """Mute a member with a blast GIF. Mod only."""
     await member.timeout(timedelta(minutes=10), reason=reason)
-    gifs = load_config().get("ACTION_GIFS", {})
+    # Reload config to get latest GIFs
+    cfg = load_config()
+    gifs = cfg.get("ACTION_GIFS", {})
     gif_url = gifs.get("blast", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/lT4Ix992z2zfO/giphy.gif")
+    
     embed = discord.Embed(title="💥 BLASTED!", description=f"{member.mention} was blasted away for 10 minutes!", color=0xE74C3C)
-    embed.set_image(url=gif_url)
+    if gif_url:
+        embed.set_image(url=gif_url)
+    
     await ctx.send(embed=embed)
     await log_moderation(ctx.guild, f"💥 {member.name} was blasted (10m mute)", reason)
 
@@ -5198,10 +5214,15 @@ async def blast_cmd(ctx, member: discord.Member, *, reason: str = "Blasted!"):
 async def rct_cmd(ctx, member: discord.Member):
     """Unmute a member with a recovery GIF. Mod only."""
     await member.timeout(None, reason="RCT Recovery")
-    gifs = load_config().get("ACTION_GIFS", {})
+    # Reload config to get latest GIFs
+    cfg = load_config()
+    gifs = cfg.get("ACTION_GIFS", {})
     gif_url = gifs.get("rct", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/3o7TKVUn7iM8FMEU24/giphy.gif")
+    
     embed = discord.Embed(title="✨ RECOVERED!", description=f"{member.mention} was brought back into the timeline!", color=0x2ECC71)
-    embed.set_image(url=gif_url)
+    if gif_url:
+        embed.set_image(url=gif_url)
+        
     await ctx.send(embed=embed)
     await log_moderation(ctx.guild, f"✨ {member.name} was recovered (unmute)", "RCT")
 
@@ -5210,10 +5231,15 @@ async def rct_cmd(ctx, member: discord.Member):
 async def annihilate_cmd(ctx, member: discord.Member, *, reason: str = "Annihilated!"):
     """Ban a member with an annihilation GIF. Admin only."""
     await member.ban(reason=reason)
-    gifs = load_config().get("ACTION_GIFS", {})
+    # Reload config to get latest GIFs
+    cfg = load_config()
+    gifs = cfg.get("ACTION_GIFS", {})
     gif_url = gifs.get("annihilate", "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHJqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqZ3JqJmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/XzkGfSRJQCxgI/giphy.gif")
+    
     embed = discord.Embed(title="☄️ ANNIHILATED!", description=f"{member.name} has been erased from existence!", color=0x000000)
-    embed.set_image(url=gif_url)
+    if gif_url:
+        embed.set_image(url=gif_url)
+    
     await ctx.send(embed=embed)
     await log_moderation(ctx.guild, f"☄️ {member.name} was annihilated (ban)", reason)
 # ── MARRIAGE SYSTEM ───────────────────────────
