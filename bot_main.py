@@ -3189,6 +3189,17 @@ async def handle_overdue_loan(ctx_or_user, user_id, loan_data):
     """Handle overdue loan with fines and jail."""
     warnings = loan_data.get("warnings", 0)
     amount = loan_data["amount"]
+
+    async def safe_send(msg):
+        if hasattr(ctx_or_user, 'send'):
+            try: await ctx_or_user.send(msg)
+            except: pass
+        else:
+            user = bot.get_user(int(user_id))
+            if user:
+                try: await user.send(msg)
+                except: pass
+
     if warnings == 0:
         fine = int(amount * 0.05)
         jail_time = 2
@@ -3205,12 +3216,12 @@ async def handle_overdue_loan(ctx_or_user, user_id, loan_data):
             price = int(SHOP_ITEMS.get(item, {"price": 0})["price"] * 0.8)  # 20% cheaper
             await db.update_balance(user_id, price)
             await db.remove_item(user_id, item)
-            await ctx_or_user.send(f"⚠️ Your loan is overdue. Sold **{item}** for **{price:,}** {CURRENCY_NAME}.")
+            await safe_send(f"⚠️ Your loan is overdue. Sold **{item}** for **{price:,}** {CURRENCY_NAME}.")
             return
         else:
             fine = int(amount * 0.2)  # Increase fine
             await db.update_balance(user_id, -fine)
-            await ctx_or_user.send(f"⚠️ Your loan is overdue. Fined **{fine:,}** {CURRENCY_NAME}.")
+            await safe_send(f"⚠️ Your loan is overdue. Fined **{fine:,}** {CURRENCY_NAME}.")
 
     await db.update_balance(user_id, -fine)
     await db.set_cooldown(user_id, "jail", datetime.now() + timedelta(hours=jail_time))
@@ -3218,16 +3229,8 @@ async def handle_overdue_loan(ctx_or_user, user_id, loan_data):
     loan_data["warnings"] = warnings
     await db.set_loan(user_id, loan_data)
 
-    if hasattr(ctx_or_user, 'send'):
-        await ctx_or_user.send(f"🚨 Loan overdue! Fined **{fine:,}** {CURRENCY_NAME} and jailed for **{jail_time}** hours.")
-    else:
-        # If called from task, send DM
-        user = bot.get_user(int(user_id))
-        if user:
-            try:
-                await user.send(f"🚨 Loan overdue! Fined **{fine:,}** {CURRENCY_NAME} and jailed for **{jail_time}** hours.")
-            except:
-                pass
+    await safe_send(f"🚨 Loan overdue! Fined **{fine:,}** {CURRENCY_NAME} and jailed for **{jail_time}** hours.")
+
 
 @tasks.loop(minutes=10)
 async def check_loans_task():
