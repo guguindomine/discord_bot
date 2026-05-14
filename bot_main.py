@@ -58,6 +58,29 @@ async def save_config_sync(cfg: dict):
         except Exception as e:
             print(f"  [ERROR] Failed to sync config to DB: {e}")
 
+def is_authorized(exclude_ban=False):
+    """Custom check for bypass system. Admin always allowed.
+    Bypass users/roles allowed unless exclude_ban=True and command is a ban command.
+    """
+    async def predicate(ctx: commands.Context):
+        if ctx.guild is None: return False
+        if ctx.author.id == ctx.guild.owner_id or ctx.author.guild_permissions.administrator:
+            return True
+        
+        cfg = config
+        bypass_users = cfg.get("BYPASS_USER_IDS", [])
+        bypass_roles = cfg.get("BYPASS_ROLE_IDS", [])
+        
+        is_bypassed = (ctx.author.id in bypass_users or 
+                      any(role.id in bypass_roles for role in ctx.author.roles))
+        
+        if is_bypassed:
+            if exclude_ban and ctx.command.name in ["ban", "annihilate"]:
+                return False
+            return True
+        return False
+    return commands.check(predicate)
+
 # ── SECURITY CONSTANTS ──
 SCAM_LINKS = [
     "discord.gift/", "steamcommunity.com/gift", "nitro-", "free-nitro", 
@@ -581,6 +604,43 @@ class HelpSelect(discord.ui.Select):
             options.append(discord.SelectOption(label="Server Boost", description="Rewards, Logs & Special Roles", emoji="💎", value="boost"))
         super().__init__(placeholder="Select a category to view commands...", options=options)
 
+class SetupGuideView(discord.ui.View):
+    """View containing the button to reveal the Setup Guide."""
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="📖 Setup Guide", style=discord.ButtonStyle.secondary, custom_id="show_setup_guide")
+    async def show_guide(self, interaction: discord.Interaction, button: discord.ui.Button):
+        prefix = load_config().get("PREFIX", "!")
+        
+        embed = discord.Embed(
+            title="📖 Paradox Bot | Setup Guide",
+            description=(
+                "Welcome to the official setup guide! Follow these steps to get your server running perfectly:\n\n"
+                "### 1️⃣ Core Greetings\n"
+                f"• Set where I talk: `{prefix}setwelcomechannel #channel`\n"
+                f"• Customize the join message: `{prefix}setwelcome Welcome {mention}!`\n"
+                f"• Test the result: `{prefix}testjoin`\n\n"
+                "### 2️⃣ Automation\n"
+                f"• Assign a role on join: `{prefix}autorole Member`\n"
+                f"• Enable the swear filter: `{prefix}togglefilter`\n"
+                f"• Choose a log channel: `{prefix}setlogchannel #logs`\n\n"
+                "### 3️⃣ Support & Service\n"
+                f"• Create a ticket panel: `{prefix}setupticket support`\n"
+                f"• Setup carry requests: `{prefix}setupticket carry`\n"
+                f"• Add game options: `{prefix}addgame ALS ⚔️ Anime Last Stand`\n\n"
+                "### 4️⃣ Economy Management\n"
+                f"• Set daily reward: (Managed via DB)\n"
+                f"• Reset economy: `{prefix}reseteco all` (Owner only)\n\n"
+                "**Need more help?** Join our support server or visit our documentation! 💜"
+            ),
+            color=0x9B59B6,
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_footer(text="Paradox Bot | The ultimate server assistant")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     async def callback(self, interaction: discord.Interaction):
         cat = self.values[0]
         prefix = load_config().get("PREFIX", "!")
@@ -647,6 +707,8 @@ class HelpSelect(discord.ui.Select):
                 f"`{prefix}rct` / `rcs` / `unmute` <@user> - Recovery/Unmute\n"
                 f"`{prefix}annihilate <@user>` - Permanent ban with style"
             )
+            await interaction.response.edit_message(embed=embed, view=SetupGuideView())
+            return
         elif cat == "general":
             embed.title = "📊 General & Statistics"
             embed.description = (
@@ -1225,8 +1287,9 @@ async def on_message(message: discord.Message):
                 elif count == swear_cfg.get("warn2"):
                     punishment_msg = "⚠️ This is your **2nd warning**. The next one will result in a timeout!"
                 elif count == swear_cfg.get("mute"):
-                    await message.author.timeout(timedelta(minutes=1), reason="Swear Strike")
-                    punishment_msg = "🔇 You have been timed out for **1 minute**."
+                    duration = cfg.get("SWEAR_PUNISHMENT_DURATION", 1)
+                    await message.author.timeout(timedelta(minutes=duration), reason="Swear Strike")
+                    punishment_msg = f"🔇 You have been timed out for **{duration} minute(s)**."
                 elif count >= swear_cfg.get("quarantine"):
                     await apply_quarantine(message.author, "Swear Strikes")
                     punishment_msg = "⚖️ You have been sent to **Quarantine** due to excessive warnings."
@@ -2304,7 +2367,7 @@ async def apply_tiered_moderation(ctx, member: discord.Member, clause: str, cust
 # ── MODERATION COMMANDS ───────────────────────
 
 @bot.command(name="softban")
-@commands.has_permissions(ban_members=True)
+@is_authorized(exclude_ban=True)
 async def softban_cmd(ctx, member: discord.Member, *, reason="No reason provided"):
     """Ban and immediately unban to clear messages. Admin only."""
     await member.ban(reason=f"Softban: {reason}", delete_message_days=7)
@@ -2312,7 +2375,7 @@ async def softban_cmd(ctx, member: discord.Member, *, reason="No reason provided
     await ctx.send(f"🧼 **{member.display_name}** was softbanned. (Messages cleared)")
 
 @bot.command(name="mute")
-@commands.has_permissions(moderate_members=True)
+@is_authorized()
 async def mute_cmd(ctx, member: discord.Member, duration_or_clause: str = "10", *, reason: str = None):
     """Timeout a member or apply 1.x clause. Usage: !mute @user 1.1 [reason] or !mute @user 10 [reason]"""
     if await apply_tiered_moderation(ctx, member, duration_or_clause, reason):
@@ -2329,7 +2392,7 @@ async def mute_cmd(ctx, member: discord.Member, duration_or_clause: str = "10", 
     await log_moderation(ctx.guild, msg, reason)
 
 @bot.command(name="quarantine")
-@commands.has_permissions(administrator=True)
+@is_authorized()
 async def quarantine_cmd(ctx, member: discord.Member, clause: str = None, *, reason: str = None):
     """Manually send a member to quarantine or apply clause. Admin only."""
     if clause and await apply_tiered_moderation(ctx, member, clause, reason):
@@ -2474,9 +2537,9 @@ async def server_info_cmd(ctx: commands.Context):
 # ── !purge ───────────────────────────────────
 
 @bot.command(name="purge")
-@commands.has_permissions(manage_messages=True)
+@is_authorized()
 async def purge_cmd(ctx: commands.Context, amount: int = 5):
-    """Delete messages in bulk. Mod only.
+    """Delete messages in bulk. Admin/Bypass only.
     Usage: !purge 10
     """
     if amount < 1 or amount > 100:
@@ -2490,7 +2553,7 @@ async def purge_cmd(ctx: commands.Context, amount: int = 5):
 # ── !kick ────────────────────────────────────
 
 @bot.command(name="kick")
-@commands.has_permissions(kick_members=True)
+@is_authorized()
 async def kick_cmd(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
     """Kick a member or apply 1.x clause. Usage: !kick @user 1.2 [reason]"""
     parts = reason.split(" ", 1)
@@ -2517,7 +2580,7 @@ async def kick_cmd(ctx: commands.Context, member: discord.Member, *, reason: str
 # ── !ban ─────────────────────────────────────
 
 @bot.command(name="ban")
-@commands.has_permissions(ban_members=True)
+@is_authorized(exclude_ban=True)
 async def ban_cmd(ctx: commands.Context, member: discord.Member, *, reason: str = "No reason provided"):
     """Ban a member or apply 1.x clause. Usage: !ban @user 1.3 [reason]"""
     parts = reason.split(" ", 1)
@@ -2541,6 +2604,189 @@ async def ban_cmd(ctx: commands.Context, member: discord.Member, *, reason: str 
     except discord.Forbidden:
         await ctx.send("❌ I don't have permission to ban that user.")
 
+# ── !unban ───────────────────────────────────
+
+@bot.command(name="unban")
+@is_authorized(exclude_ban=True)
+async def unban_cmd(ctx: commands.Context, *, name: str):
+    """Unban a member by their name. Usage: !unban Username#1234 or Username"""
+    bans = [entry async for entry in ctx.guild.bans()]
+    target_user = None
+    
+    for ban_entry in bans:
+        user = ban_entry.user
+        # Check both name only and name#discriminator
+        if user.name.lower() == name.lower() or str(user).lower() == name.lower():
+            target_user = user
+            break
+            
+    if target_user:
+        try:
+            await ctx.guild.unban(target_user)
+            await ctx.send(f"✅ **{target_user}** has been unbanned!")
+            await log_moderation(ctx.guild, f"🔓 {target_user.name} was unbanned by {ctx.author.name}", "Manual Unban")
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to unban that user.")
+    else:
+        await ctx.send(f"❌ Could not find a banned user with the name **{name}**.")
+
+@bot.command(name="modlist")
+@is_authorized()
+async def modlist_cmd(ctx: commands.Context):
+    """List all banned, quarantined, and timed-out users."""
+    # Banned
+    bans = [entry async for entry in ctx.guild.bans()]
+    ban_list = "\n".join([f"• {entry.user} (Reason: {entry.reason})" for entry in bans]) or "None"
+    
+    # Quarantined
+    role = discord.utils.get(ctx.guild.roles, name=QUARANTINE_ROLE_NAME)
+    quarantined = [m.mention for m in ctx.guild.members if role in m.roles] if role else []
+    quarantine_list = "\n".join(quarantined) or "None"
+    
+    # Timed Out
+    timed_out = [m.mention for m in ctx.guild.members if m.communication_disabled_until and m.communication_disabled_until > discord.utils.utcnow()]
+    timeout_list = "\n".join(timed_out) or "None"
+    
+    embed = discord.Embed(title="🛡️ Server Punishment List", color=0xE74C3C, timestamp=discord.utils.utcnow())
+    embed.add_field(name="🔨 Banned Users", value=ban_list[:1024], inline=False)
+    embed.add_field(name="⚖️ Quarantined Users", value=quarantine_list[:1024], inline=False)
+    embed.add_field(name="🔇 Timed Out Users", value=timeout_list[:1024], inline=False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name="swearlist")
+@is_authorized()
+async def swearlist_cmd(ctx: commands.Context):
+    """List all blacklisted words."""
+    cfg = load_config()
+    swears = cfg.get("SWEAR_WORDS", [])
+    
+    if not swears:
+        return await ctx.send("ℹ️ No swear words are currently blacklisted.")
+        
+    text = ", ".join([f"`{w}`" for w in swears])
+    embed = discord.Embed(title="🚫 Blacklisted Words", description=text[:4000], color=0xE74C3C)
+    await ctx.send(embed=embed)
+
+# ── !setbypass ────────────────────────────────
+
+@bot.command(name="setbypass")
+@commands.has_permissions(administrator=True)
+async def set_bypass_cmd(ctx: commands.Context, target: str):
+    """Give a user or role access to all commands except ban. Usage: !setbypass @user or !setbypass @role"""
+    cfg = load_config()
+    
+    # Try to parse as member
+    try:
+        member = await commands.MemberConverter().convert(ctx, target)
+        if "BYPASS_USER_IDS" not in cfg: cfg["BYPASS_USER_IDS"] = []
+        if member.id not in cfg["BYPASS_USER_IDS"]:
+            cfg["BYPASS_USER_IDS"].append(member.id)
+            await save_config_sync(cfg)
+            return await ctx.send(f"✅ **{member.display_name}** now has global command bypass! (Except Ban)")
+        else:
+            cfg["BYPASS_USER_IDS"].remove(member.id)
+            await save_config_sync(cfg)
+            return await ctx.send(f"❌ **{member.display_name}** removed from global command bypass.")
+    except:
+        pass
+        
+    # Try to parse as role
+    try:
+        role = await commands.RoleConverter().convert(ctx, target)
+        if "BYPASS_ROLE_IDS" not in cfg: cfg["BYPASS_ROLE_IDS"] = []
+        if role.id not in cfg["BYPASS_ROLE_IDS"]:
+            cfg["BYPASS_ROLE_IDS"].append(role.id)
+            await save_config_sync(cfg)
+            return await ctx.send(f"✅ Role **{role.name}** now has global command bypass! (Except Ban)")
+        else:
+            cfg["BYPASS_ROLE_IDS"].remove(role.id)
+            await save_config_sync(cfg)
+            return await ctx.send(f"❌ Role **{role.name}** removed from global command bypass.")
+    except:
+        return await ctx.send("❌ Please mention a valid user or role.")
+
+@bot.command(name="setswearthreshold")
+@is_authorized()
+async def set_swear_threshold_cmd(ctx: commands.Context, action: str, count: int):
+    """Set infraction count for a swear action. Admin/Bypass only.
+    Actions: silent, warn1, warn2, mute, quarantine
+    """
+    cfg = load_config()
+    if "SWEAR_THRESHOLDS" not in cfg:
+        cfg["SWEAR_THRESHOLDS"] = {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8}
+    
+    action = action.lower()
+    if action not in cfg["SWEAR_THRESHOLDS"]:
+        return await ctx.send(f"❌ Invalid action. Choose from: {', '.join(cfg['SWEAR_THRESHOLDS'].keys())}")
+        
+    cfg["SWEAR_THRESHOLDS"][action] = count
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Swear threshold for **{action}** set to **{count}** infractions.")
+
+@bot.command(name="setswearpenalty")
+@is_authorized()
+async def set_swear_penalty_cmd(ctx: commands.Context, duration: str):
+    """Set how long a user is muted for swearing. Admin/Bypass only.
+    Usage: !setswearpenalty 10m, 1h, 1d
+    """
+    from bot_functions import parse_duration, format_duration
+    seconds = parse_duration(duration)
+    minutes = seconds // 60
+    
+    cfg = load_config()
+    cfg["SWEAR_PUNISHMENT_DURATION"] = minutes
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Swear mute penalty set to **{format_duration(seconds)}**.")
+
+@bot.command(name="settier")
+@is_authorized()
+async def set_tier_cmd(ctx: commands.Context, clause: str, duration: str):
+    """Set duration for a punishment tier. Admin/Bypass only.
+    Usage: !settier 1.1 1h
+    """
+    from bot_functions import parse_duration, format_duration
+    seconds = parse_duration(duration)
+    minutes = seconds // 60
+    
+    cfg = load_config()
+    if "PUNISHMENT_TIERS" not in cfg:
+        cfg["PUNISHMENT_TIERS"] = {
+            "1.1": {"action": "mute", "duration": 10, "label": "Rule 1.1 (Minor)"},
+            "1.2": {"action": "mute", "duration": 30, "label": "Rule 1.2 (Standard)"},
+            "1.3": {"action": "mute", "duration": 60, "label": "Rule 1.3 (Serious)"},
+            "1.4": {"action": "quarantine", "duration": 1440, "label": "Rule 1.4 (Severe)"},
+            "1.5": {"action": "quarantine", "duration": 10080, "label": "Rule 1.5 (Critical)"}
+        }
+        
+    if clause not in cfg["PUNISHMENT_TIERS"]:
+        return await ctx.send(f"❌ Invalid tier clause. (e.g. 1.1, 1.2)")
+        
+    cfg["PUNISHMENT_TIERS"][clause]["duration"] = minutes
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Duration for tier **{clause}** set to **{format_duration(seconds)}**.")
+
+@bot.command(name="setcooldown")
+@is_authorized()
+async def set_cooldown_cmd(ctx: commands.Context, command_name: str, duration: str):
+    """Set cooldown for an economy command. Admin/Bypass only.
+    Usage: !setcooldown work 10m
+    """
+    from bot_functions import parse_duration, format_duration
+    seconds = parse_duration(duration)
+    
+    cfg = load_config()
+    if "COMMAND_COOLDOWNS" not in cfg:
+        cfg["COMMAND_COOLDOWNS"] = {"daily": 86400, "work": 300, "crime": 60, "heist": 300, "steal": 300, "casino": 5}
+        
+    cmd_key = command_name.lower()
+    if cmd_key not in cfg["COMMAND_COOLDOWNS"]:
+        return await ctx.send(f"❌ Invalid command. Choose from: {', '.join(cfg['COMMAND_COOLDOWNS'].keys())}")
+        
+    cfg["COMMAND_COOLDOWNS"][cmd_key] = seconds
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Cooldown for **!{cmd_key}** set to **{format_duration(seconds)}**.")
+
 # ── !setboostchannel ──────────────────────────
 
 @bot.command(name="setboostchannel")
@@ -2560,6 +2806,89 @@ async def set_boost_role(ctx: commands.Context, *, role_name: str):
     cfg["BOOST_ROLE_NAME"] = role_name
     await save_config_sync(cfg)
     await ctx.send(f"✅ Users who boost will receive the role **{role_name}**.")
+
+# ── CONFIG CUSTOMIZATION ──────────────────────
+
+@bot.command(name="setswearthreshold")
+@is_authorized()
+async def set_swear_threshold_cmd(ctx: commands.Context, action: str, count: int):
+    """Set infraction count for a swear action. Admin/Bypass only.
+    Actions: silent, warn1, warn2, mute, quarantine
+    """
+    cfg = load_config()
+    if "SWEAR_THRESHOLDS" not in cfg:
+        cfg["SWEAR_THRESHOLDS"] = {"silent": 1, "warn1": 2, "warn2": 3, "mute": 4, "quarantine": 8}
+    
+    action = action.lower()
+    if action not in cfg["SWEAR_THRESHOLDS"]:
+        return await ctx.send(f"❌ Invalid action. Choose from: {', '.join(cfg['SWEAR_THRESHOLDS'].keys())}")
+        
+    cfg["SWEAR_THRESHOLDS"][action] = count
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Swear threshold for **{action}** set to **{count}** infractions.")
+
+@bot.command(name="setswearpenalty")
+@is_authorized()
+async def set_swear_penalty_cmd(ctx: commands.Context, duration: str):
+    """Set how long a user is muted for swearing. Admin/Bypass only.
+    Usage: !setswearpenalty 10m, 1h, 1d
+    """
+    from bot_functions import parse_duration, format_duration
+    seconds = parse_duration(duration)
+    minutes = seconds // 60
+    
+    cfg = load_config()
+    cfg["SWEAR_PUNISHMENT_DURATION"] = minutes
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Swear mute penalty set to **{format_duration(seconds)}**.")
+
+@bot.command(name="settier")
+@is_authorized()
+async def set_tier_cmd(ctx: commands.Context, clause: str, duration: str):
+    """Set duration for a punishment tier. Admin/Bypass only.
+    Usage: !settier 1.1 1h
+    """
+    from bot_functions import parse_duration, format_duration
+    seconds = parse_duration(duration)
+    minutes = seconds // 60
+    
+    cfg = load_config()
+    if "PUNISHMENT_TIERS" not in cfg:
+        cfg["PUNISHMENT_TIERS"] = {
+            "1.1": {"action": "mute", "duration": 10, "label": "Rule 1.1 (Minor)"},
+            "1.2": {"action": "mute", "duration": 30, "label": "Rule 1.2 (Standard)"},
+            "1.3": {"action": "mute", "duration": 60, "label": "Rule 1.3 (Serious)"},
+            "1.4": {"action": "quarantine", "duration": 1440, "label": "Rule 1.4 (Severe)"},
+            "1.5": {"action": "quarantine", "duration": 10080, "label": "Rule 1.5 (Critical)"}
+        }
+        
+    if clause not in cfg["PUNISHMENT_TIERS"]:
+        return await ctx.send(f"❌ Invalid tier clause. (e.g. 1.1, 1.2)")
+        
+    cfg["PUNISHMENT_TIERS"][clause]["duration"] = minutes
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Duration for tier **{clause}** set to **{format_duration(seconds)}**.")
+
+@bot.command(name="setcooldown")
+@is_authorized()
+async def set_cooldown_cmd(ctx: commands.Context, command_name: str, duration: str):
+    """Set cooldown for an economy command. Admin/Bypass only.
+    Usage: !setcooldown work 10m
+    """
+    from bot_functions import parse_duration, format_duration
+    seconds = parse_duration(duration)
+    
+    cfg = load_config()
+    if "COMMAND_COOLDOWNS" not in cfg:
+        cfg["COMMAND_COOLDOWNS"] = {"daily": 86400, "work": 300, "crime": 60, "heist": 300, "steal": 300, "casino": 5}
+        
+    cmd_key = command_name.lower()
+    if cmd_key not in cfg["COMMAND_COOLDOWNS"]:
+        return await ctx.send(f"❌ Invalid command. Choose from: {', '.join(cfg['COMMAND_COOLDOWNS'].keys())}")
+        
+    cfg["COMMAND_COOLDOWNS"][cmd_key] = seconds
+    await save_config_sync(cfg)
+    await ctx.send(f"✅ Cooldown for **!{cmd_key}** set to **{format_duration(seconds)}**.")
 
 @bot.command(name="setboostmessage")
 @commands.has_permissions(administrator=True)
@@ -3390,6 +3719,14 @@ async def inventory_cmd(ctx: commands.Context, member: discord.Member = None):
 async def bj_cmd(ctx: commands.Context, amount: str):
     """Start a round of blackjack with an interactive button interface."""
     user_id = str(ctx.author.id)
+    cfg = load_config()
+    last_gamble = await db.get_cooldown(user_id, "casino")
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("casino", 5)
+    if last_gamble and datetime.now() < last_gamble + timedelta(seconds=cd):
+        rem = (last_gamble + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Don't go broke too fast! Wait **{int(rem.total_seconds())}s**.")
+
     balance = await db.get_balance(user_id)
     if amount.lower() == "all":
         bet = balance
@@ -3413,18 +3750,23 @@ async def bj_cmd(ctx: commands.Context, amount: str):
     view = BlackjackView(ctx, ctx.author.id, bet)
     view.win_chance = win_chance # Pass win_chance to view
     embed = view.create_embed()
+    await db.set_cooldown(user_id, "casino", datetime.now())
     await ctx.send(embed=embed, view=view)
 
 @bot.command(name="daily")
 async def daily_cmd(ctx: commands.Context):
     """Claim your daily paradoxals."""
     user_id = str(ctx.author.id)
+    cfg = load_config()
     last_claim = await db.get_cooldown(user_id, "daily")
     
-    cd_seconds = COMMAND_COOLDOWNS["daily"]
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd_seconds = cds.get("daily", 86400)
     if last_claim and datetime.now() < last_claim + timedelta(seconds=cd_seconds):
         rem = (last_claim + timedelta(seconds=cd_seconds)) - datetime.now()
-        return await ctx.send(f"❌ You already claimed your daily! Try again in **{int(rem.total_seconds()//3600)}h {int((rem.total_seconds()%3600)//60)}m**.")
+        hours, remainder = divmod(int(rem.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return await ctx.send(f"❌ You already claimed your daily! Try again in **{hours}h {minutes}m {seconds}s**.")
 
     # Buffed amount: 15,000 - 35,000
     amount = random.randint(15000, 35000)
@@ -3440,9 +3782,11 @@ async def daily_cmd(ctx: commands.Context):
 async def work_cmd(ctx: commands.Context):
     """Work to earn some paradoxals safely."""
     user_id = str(ctx.author.id)
+    cfg = load_config()
     last_work = await db.get_cooldown(user_id, "work")
     
-    cd = COMMAND_COOLDOWNS["work"]
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("work", 300)
     if last_work and datetime.now() < last_work + timedelta(seconds=cd):
         rem = (last_work + timedelta(seconds=cd)) - datetime.now()
         return await ctx.send(f"⏳ You are tired! Rest for **{int(rem.total_seconds())}s**.")
@@ -3494,6 +3838,14 @@ async def give_cmd(ctx: commands.Context, member: discord.Member, amount: str):
 async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
     """Flip a coin with rigged house odds. Usage: !cf <bet> [heads/tails]"""
     user_id = str(ctx.author.id)
+    cfg = load_config()
+    last_gamble = await db.get_cooldown(user_id, "casino")
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("casino", 5)
+    if last_gamble and datetime.now() < last_gamble + timedelta(seconds=cd):
+        rem = (last_gamble + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Don't go broke too fast! Wait **{int(rem.total_seconds())}s**.")
+
     balance = await db.get_balance(user_id)
 
     if bet.lower() == "all": bet_amount = balance
@@ -3525,6 +3877,7 @@ async def coinflip_cmd(ctx: commands.Context, bet: str, choice: str = "heads"):
     if result == "t": result = "tails"
 
     await db.update_quest_progress(user_id, "gamble")
+    await db.set_cooldown(user_id, "casino", datetime.now())
     if win:
         await db.update_balance(user_id, bet_amount)
         await msg.edit(content=None, embed=discord.Embed(title="🪙 Coinflip WIN", description=f"Landed on **{result.upper()}**!\n🎉 Won **{bet_amount:,}** {CURRENCY_NAME}!", color=0x2ECC71))
@@ -3565,6 +3918,14 @@ async def allow_cmd(ctx: commands.Context, member: discord.Member, *, command: s
 async def slots_cmd(ctx: commands.Context, bet: int):
     """Rigged slot machine with inventory luck modifiers."""
     user_id = str(ctx.author.id)
+    cfg = load_config()
+    last_gamble = await db.get_cooldown(user_id, "casino")
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("casino", 5)
+    if last_gamble and datetime.now() < last_gamble + timedelta(seconds=cd):
+        rem = (last_gamble + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Don't go broke too fast! Wait **{int(rem.total_seconds())}s**.")
+
     balance = await db.get_balance(user_id)
     if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
     
@@ -3594,12 +3955,21 @@ async def slots_cmd(ctx: commands.Context, bet: int):
     await asyncio.sleep(1.0)
         
     await db.update_quest_progress(user_id, "gamble")
+    await db.set_cooldown(user_id, "casino", datetime.now())
     await msg.edit(content=None, embed=emb)
 
 @bot.command(name="roulette")
 async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
     """Rigged roulette with inventory luck modifiers."""
     user_id = str(ctx.author.id)
+    cfg = load_config()
+    last_gamble = await db.get_cooldown(user_id, "casino")
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("casino", 5)
+    if last_gamble and datetime.now() < last_gamble + timedelta(seconds=cd):
+        rem = (last_gamble + timedelta(seconds=cd)) - datetime.now()
+        return await ctx.send(f"⏳ Don't go broke too fast! Wait **{int(rem.total_seconds())}s**.")
+
     balance = await db.get_balance(user_id)
     if bet <= 0 or bet > balance: return await ctx.send("❌ Invalid bet.")
     
@@ -3632,6 +4002,7 @@ async def roulette_cmd(ctx: commands.Context, bet: int, choice: str):
     elif choice.isdigit() and int(choice) == res_num: actually_won = True
 
     await db.update_quest_progress(user_id, "gamble")
+    await db.set_cooldown(user_id, "casino", datetime.now())
     if actually_won:
         payout = bet * (35 if choice.lower() == "green" or choice.isdigit() else 2)
         await db.update_balance(user_id, payout - bet)
@@ -4884,13 +5255,15 @@ class TeamHeistView(discord.ui.View):
 async def crime_cmd(ctx: commands.Context):
     """Commit a quick random crime for fast cash."""
     user_id = str(ctx.author.id)
+    cfg = load_config()
     jail_end = await db.get_cooldown(user_id, "jail")
     if jail_end and datetime.now() < jail_end:
         rem = jail_end - datetime.now()
         return await ctx.send(f"🔒 You are in **Jail**! Release in **{int(rem.total_seconds()//60)}m**.")
 
     last_crime = await db.get_cooldown(user_id, "crime")
-    cd = COMMAND_COOLDOWNS["crime"]
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("crime", 60)
     if last_crime and datetime.now() < last_crime + timedelta(seconds=cd):
         rem = (last_crime + timedelta(seconds=cd)) - datetime.now()
         return await ctx.send(f"⏳ Wait **{int(rem.total_seconds())}s**.")
@@ -4932,12 +5305,14 @@ async def steal_cmd(ctx: commands.Context, target: discord.Member):
     
     t_id = str(target.id)
     a_id = str(ctx.author.id)
+    cfg = load_config()
     t_bal = await db.get_balance(t_id)
     
     if t_bal < 5000: return await ctx.send(f"❌ {target.display_name} is too poor.")
 
     last_steal = await db.get_cooldown(a_id, "steal")
-    cd = COMMAND_COOLDOWNS["steal"]
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("steal", 300)
     if last_steal and datetime.now() < last_steal + timedelta(seconds=cd):
         rem = (last_steal + timedelta(seconds=cd)) - datetime.now()
         return await ctx.send(f"⏳ Wait **{int(rem.total_seconds()//60)}m**.")
@@ -4991,7 +5366,9 @@ async def heist_cmd(ctx: commands.Context):
 
     # Check cooldown
     last_heist = await db.get_cooldown(user_id, "heist")
-    cd = COMMAND_COOLDOWNS["heist"]
+    cfg = load_config()
+    cds = cfg.get("COMMAND_COOLDOWNS", COMMAND_COOLDOWNS)
+    cd = cds.get("heist", 300)
     if last_heist and datetime.now() < last_heist + timedelta(seconds=cd):
         rem = (last_heist + timedelta(seconds=cd)) - datetime.now()
         return await ctx.send(f"⏳ Your heist crew is laying low. Try again in **{int(rem.total_seconds()//60)}m**.")

@@ -20,9 +20,9 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 def load_config():
     """Load configuration from JSON or Environment Variables (for Railway)."""
     config = {}
-    if os.path.exists(CONFIG_FILE):
+    if os.path.exists(CONFIG_PATH):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 config = json.load(f)
         except Exception as e:
             print(f"Error loading config file: {e}")
