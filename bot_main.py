@@ -274,6 +274,10 @@ async def voice_xp_task():
 
 async def add_xp_logic(member: discord.Member, amount: int, source: str = "message", channel = None):
     """Core logic for adding XP, checking cooldowns, and handling level ups."""
+    cfg = load_config()
+    if not cfg.get("LEVELING_SYSTEM_ENABLED", True):
+        return
+
     user_id = str(member.id)
     
     # ── Cooldown Check for Messages ──
@@ -762,7 +766,9 @@ class SetupGuideView(discord.ui.View):
                 f"`{prefix}setlevel <@user> <level>` - Set user level (Admin)\n"
                 f"`{prefix}setxp <@user> <xp>` - Set user XP (Admin)\n"
                 f"`{prefix}setlevelchannel <#ch>` - Set level-up channel (Admin)\n"
-                f"`{prefix}setrank <level> <name>` - Set rank name for a level (Admin)\n\n"
+                f"`{prefix}setrank <level> <name>` - Set rank name for a level (Admin)\n"
+                f"`{prefix}stoplevels` - Stop the leveling system (Admin)\n"
+                f"`{prefix}returnlevels` - Restart the leveling system (Admin)\n\n"
                 f"**📈 XP Generation:**\n"
                 f"💬 Messages: **20-30 XP** (1m cooldown)\n"
                 f"🎙️ Voice: **6 XP / minute**\n\n"
@@ -1928,6 +1934,28 @@ async def set_xp_cmd(ctx: commands.Context, member: discord.Member, xp: int):
     
     await handle_level_up(member, level, ctx.channel)
     await ctx.send(f"✅ Set {member.mention}'s XP to **{xp:,}** (New Level: {level}).")
+
+# ── !stoplevels ──────────────────────────────
+
+@bot.command(name="stoplevels")
+@commands.has_permissions(administrator=True)
+async def stop_levels_cmd(ctx: commands.Context):
+    """Stop the leveling system. Admin only."""
+    cfg = load_config()
+    cfg["LEVELING_SYSTEM_ENABLED"] = False
+    await save_config_sync(cfg)
+    await ctx.send("✅ The leveling system has been **disabled**. Users will no longer earn XP or level up.")
+
+# ── !returnlevels ────────────────────────────
+
+@bot.command(name="returnlevels")
+@commands.has_permissions(administrator=True)
+async def return_levels_cmd(ctx: commands.Context):
+    """Restart the leveling system. Admin only."""
+    cfg = load_config()
+    cfg["LEVELING_SYSTEM_ENABLED"] = True
+    await save_config_sync(cfg)
+    await ctx.send("✅ The leveling system has been **enabled**. Users can now earn XP and level up.")
 
 @bot.command(name="setlevelchannel")
 @commands.has_permissions(administrator=True)

@@ -94,6 +94,8 @@ Type `!help paradox` in Discord for a fully interactive menu!
 | `!reseteco <@user/all>` | Reset economy data (Owner only) |
 | `!setlevel <@user> <num>` | Set exact level/XP for a user |
 | `!setrank <lvl> <name>` | Customize kingdom role names |
+| `!stoplevels` | Disable the leveling system completely |
+| `!returnlevels` | Enable the leveling system |
 
 ### 🪙 Economy & Casino (User)
 | Command | Description |
